@@ -7,7 +7,8 @@
 #   1. a Fleet comes up serving, with the kernel deployed
 #   2. Blueprint and Workspace resources reach the kernel's registries
 #   3. the internal listener is closed to other pods
-#   4. a kernel image change rolls out with no failed request
+#   4. a kernel image change rolls out with no failed request, and a rolling
+#      restart of the nodes under load loses no write
 #   5. a celld image change stops every node first and loses no write
 #   6. deleting the Fleet leaves the bucket's data, so a new Fleet has it
 #
@@ -147,6 +148,16 @@ echo "kernel now: $(api GET /version | head -1)"
 python3 "$root/spike/celld/scripts/check.py" "$results/kernel-rollout.log"
 grep -q -v ' 200 ' "$results/kernel-rollout.log" && fail "requests failed during the kernel rollout"
 echo "no failed requests"
+
+step "4b. Rolling restart of the nodes under load"
+start_writer "$cell" "$results/rolling-restart.log"
+sleep 3
+"${k[@]}" patch fleet kodo --type=merge -p '{"spec":{"idleEvictSeconds":31}}' >/dev/null
+"${k[@]}" rollout status statefulset/kodo --timeout=600s >/dev/null
+wait_ready
+sleep 5
+stop_writer "$cell"
+python3 "$root/spike/celld/scripts/check.py" "$results/rolling-restart.log"
 
 step "5. celld image change"
 start_writer "$cell" "$results/celld-upgrade.log"
