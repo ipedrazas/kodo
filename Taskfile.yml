@@ -68,17 +68,11 @@ tasks:
       - kind delete cluster --name {{.KIND_CLUSTER}}
 
   spike:deploy:
-    desc: Deploy the spike app and sample gadget bundle to the spike bucket (needs celld and esbuild)
-    dir: spike/celld
-    vars:
-      DIGEST:
-        sh: shasum -a 256 gadgets/notes.js | cut -d' ' -f1
+    desc: Deploy the spike app and sample gadget bundles to the spike bucket (needs celld and esbuild)
     cmds:
-      - S3_ENDPOINT=$AWS_ENDPOINT_URL_S3 celld deploy app --bucket s3://{{.SPIKE_BUCKET}} --region auto
       - >-
-        S3_ENDPOINT=$AWS_ENDPOINT_URL_S3 celld r2 put bundles sha256/{{.DIGEST}}.js --path gadgets/notes.js
-        --content-type text/javascript --bucket s3://{{.SPIKE_BUCKET}} --region auto
-      - echo "bundle digest {{.DIGEST}}"
+        S3_ENDPOINT=$AWS_ENDPOINT_URL_S3
+        spike/celld/scripts/deploy.sh --bucket s3://{{.SPIKE_BUCKET}} --region auto
 
   spike:up:
     desc: Run the celld spike fleet on the current kubectl context
@@ -87,10 +81,43 @@ tasks:
       - >-
         kubectl -n {{.SPIKE_NS}} create secret generic celld-bucket --from-env-file=.env
         --dry-run=client -o yaml | kubectl apply -f -
-      - kubectl apply -f spike/celld/k8s/celld.yaml
+      - kubectl apply -k spike/celld/k8s/k3s
       - kubectl -n {{.SPIKE_NS}} rollout status sts/celld --timeout=300s
+      - task: spike:client
 
   spike:down:
     desc: Delete the celld spike namespace (the bucket is left untouched)
     cmds:
       - kubectl delete namespace {{.SPIKE_NS}}
+
+  spike:client:
+    desc: Start the load-generating client pod and copy the spike scripts into it
+    cmds:
+      - >-
+        kubectl -n {{.SPIKE_NS}} get pod client >/dev/null 2>&1 ||
+        kubectl -n {{.SPIKE_NS}} run client --image=curlimages/curl:8.16.0 --restart=Never --command -- sleep 604800
+      - kubectl -n {{.SPIKE_NS}} wait --for=condition=Ready pod/client --timeout=120s
+      - for: [writer.sh, sweep.sh, burst.sh, activate.sh]
+        cmd: kubectl -n {{.SPIKE_NS}} cp spike/celld/scripts/{{.ITEM}} client:/tmp/{{.ITEM}}
+
+  spike:kind:up:
+    desc: Run the spike fleet on a local kind cluster with SeaweedFS (needs Docker, celld and esbuild)
+    cmds:
+      - task: kind:up
+      - kubectl config use-context kind-{{.KIND_CLUSTER}}
+      - kubectl create namespace {{.SPIKE_NS}} --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n {{.SPIKE_NS}} apply -f spike/celld/k8s/kind/seaweedfs.yaml
+      - kubectl -n {{.SPIKE_NS}} rollout status deploy/seaweedfs --timeout=180s
+      - task: spike:client
+      - >-
+        kubectl -n {{.SPIKE_NS}} exec client -- curl -sf -X PUT --aws-sigv4 aws:amz:us-east-1:s3
+        --user devkey:devsecret http://seaweedfs:8333/kodo-ci
+      - spike/celld/scripts/kind-deploy.sh
+      - kubectl apply -k spike/celld/k8s/kind
+      - kubectl -n {{.SPIKE_NS}} rollout status sts/celld --timeout=300s
+
+  spike:kill-test:
+    desc: Force-kill a celld pod under write load and fail on any lost write
+    cmds:
+      - mkdir -p spike/celld/results/ci
+      - spike/celld/scripts/kill-test.sh spike/celld/results/ci/kill.log {{.SECONDS | default 60}}

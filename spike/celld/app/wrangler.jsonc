@@ -2,13 +2,20 @@
   "name": "kodo-spike",
   "main": "index.js",
   "compatibility_date": "2026-01-01",
+  "vars": { "KERNEL_LOAD": "load" },
   "worker_loaders": [{ "binding": "LOADER" }],
   "r2_buckets": [{ "binding": "BUNDLES", "bucket_name": "bundles" }],
   "durable_objects": {
     "bindings": [
       { "name": "COUNTER", "class_name": "Counter" },
-      { "name": "CELL", "class_name": "Cell" }
+      { "name": "CELL", "class_name": "Cell" },
+      { "name": "XCELL", "class_name": "XCell" },
+      { "name": "WSECHO", "class_name": "WsEcho" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Counter", "Cell"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Counter", "Cell"] },
+    { "tag": "v2", "new_sqlite_classes": ["XCell"] },
+    { "tag": "v3", "new_sqlite_classes": ["WsEcho"] }
+  ]
 }

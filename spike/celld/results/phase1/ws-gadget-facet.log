@@ -1,0 +1,346 @@
+{"t":"1.0","event":"error","message":""}
+{"t":"1.0","event":"close","code":1006,"reason":""}
+{"t":"2.0","event":"open","ms":29}
+{"t":"2.0","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"3.0","event":"open","ms":23}
+{"t":"3.0","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"4.1","event":"error","message":""}
+{"t":"4.1","event":"close","code":1006,"reason":""}
+{"t":"5.1","event":"open","ms":15}
+{"t":"5.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"6.1","event":"error","message":""}
+{"t":"6.1","event":"close","code":1006,"reason":""}
+{"t":"7.1","event":"open","ms":17}
+{"t":"7.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"8.1","event":"open","ms":8}
+{"t":"8.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"9.1","event":"error","message":""}
+{"t":"9.1","event":"close","code":1006,"reason":""}
+{"t":"10.1","event":"open","ms":8}
+{"t":"10.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"11.1","event":"error","message":""}
+{"t":"11.1","event":"close","code":1006,"reason":""}
+{"t":"12.2","event":"open","ms":29}
+{"t":"12.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"13.2","event":"open","ms":23}
+{"t":"13.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"14.2","event":"error","message":""}
+{"t":"14.2","event":"close","code":1006,"reason":""}
+{"t":"15.2","event":"open","ms":7}
+{"t":"15.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"16.2","event":"open","ms":8}
+{"t":"16.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"17.2","event":"open","ms":7}
+{"t":"17.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"18.2","event":"open","ms":8}
+{"t":"18.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"19.2","event":"open","ms":7}
+{"t":"19.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"20.2","event":"error","message":""}
+{"t":"20.2","event":"close","code":1006,"reason":""}
+{"t":"21.3","event":"open","ms":28}
+{"t":"21.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"22.3","event":"open","ms":41}
+{"t":"22.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"23.3","event":"open","ms":7}
+{"t":"23.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"24.3","event":"open","ms":26}
+{"t":"24.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"25.4","event":"error","message":""}
+{"t":"25.4","event":"close","code":1006,"reason":""}
+{"t":"26.4","event":"error","message":""}
+{"t":"26.4","event":"close","code":1006,"reason":""}
+{"t":"27.4","event":"open","ms":7}
+{"t":"27.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"28.4","event":"open","ms":6}
+{"t":"28.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"29.4","event":"open","ms":7}
+{"t":"29.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"30.4","event":"open","ms":6}
+{"t":"30.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"31.4","event":"open","ms":7}
+{"t":"31.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"32.4","event":"open","ms":27}
+{"t":"32.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"33.4","event":"open","ms":15}
+{"t":"33.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"34.4","event":"error","message":""}
+{"t":"34.4","event":"close","code":1006,"reason":""}
+{"t":"35.5","event":"open","ms":20}
+{"t":"35.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"36.5","event":"open","ms":8}
+{"t":"36.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"37.5","event":"error","message":""}
+{"t":"37.5","event":"close","code":1006,"reason":""}
+{"t":"38.5","event":"open","ms":7}
+{"t":"38.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"39.5","event":"open","ms":7}
+{"t":"39.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"40.5","event":"error","message":""}
+{"t":"40.5","event":"close","code":1006,"reason":""}
+{"t":"41.5","event":"open","ms":34}
+{"t":"41.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"42.5","event":"open","ms":8}
+{"t":"42.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"43.5","event":"error","message":""}
+{"t":"43.5","event":"close","code":1006,"reason":""}
+{"t":"44.5","event":"error","message":""}
+{"t":"44.5","event":"close","code":1006,"reason":""}
+{"t":"45.6","event":"open","ms":31}
+{"t":"45.6","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"46.6","event":"open","ms":8}
+{"t":"46.6","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"47.6","event":"open","ms":7}
+{"t":"47.6","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"48.6","event":"error","message":""}
+{"t":"48.6","event":"close","code":1006,"reason":""}
+{"t":"49.6","event":"open","ms":6}
+{"t":"49.6","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"50.6","event":"error","message":""}
+{"t":"50.6","event":"close","code":1006,"reason":""}
+{"t":"51.6","event":"open","ms":6}
+{"t":"51.6","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"52.6","event":"error","message":""}
+{"t":"52.6","event":"close","code":1006,"reason":""}
+{"t":"53.7","event":"open","ms":25}
+{"t":"53.7","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"54.7","event":"open","ms":7}
+{"t":"54.7","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"55.7","event":"error","message":""}
+{"t":"55.7","event":"close","code":1006,"reason":""}
+{"t":"56.7","event":"error","message":""}
+{"t":"56.7","event":"close","code":1006,"reason":""}
+{"t":"57.7","event":"error","message":""}
+{"t":"57.7","event":"close","code":1006,"reason":""}
+{"t":"58.7","event":"open","ms":6}
+{"t":"58.7","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"59.7","event":"open","ms":21}
+{"t":"59.7","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"61.1","event":"open","ms":419}
+{"t":"61.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"62.1","event":"open","ms":7}
+{"t":"62.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"63.1","event":"error","message":""}
+{"t":"63.1","event":"close","code":1006,"reason":""}
+{"t":"64.2","event":"open","ms":33}
+{"t":"64.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"65.2","event":"open","ms":6}
+{"t":"65.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"66.2","event":"open","ms":17}
+{"t":"66.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"67.2","event":"error","message":""}
+{"t":"67.2","event":"close","code":1006,"reason":""}
+{"t":"68.2","event":"error","message":""}
+{"t":"68.2","event":"close","code":1006,"reason":""}
+{"t":"69.2","event":"open","ms":22}
+{"t":"69.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"70.2","event":"error","message":""}
+{"t":"70.2","event":"close","code":1006,"reason":""}
+{"t":"71.2","event":"open","ms":7}
+{"t":"71.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"72.3","event":"error","message":""}
+{"t":"72.3","event":"close","code":1006,"reason":""}
+{"t":"73.3","event":"open","ms":27}
+{"t":"73.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"74.3","event":"open","ms":7}
+{"t":"74.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"75.3","event":"open","ms":7}
+{"t":"75.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"76.3","event":"open","ms":8}
+{"t":"76.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"77.3","event":"open","ms":6}
+{"t":"77.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"78.3","event":"error","message":""}
+{"t":"78.3","event":"close","code":1006,"reason":""}
+{"t":"79.3","event":"open","ms":6}
+{"t":"79.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"80.3","event":"error","message":""}
+{"t":"80.3","event":"close","code":1006,"reason":""}
+{"t":"81.3","event":"error","message":""}
+{"t":"81.3","event":"close","code":1006,"reason":""}
+{"t":"82.4","event":"open","ms":44}
+{"t":"82.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"83.4","event":"error","message":""}
+{"t":"83.4","event":"close","code":1006,"reason":""}
+{"t":"84.4","event":"open","ms":22}
+{"t":"84.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"85.4","event":"open","ms":9}
+{"t":"85.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"86.4","event":"open","ms":7}
+{"t":"86.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"87.4","event":"error","message":""}
+{"t":"87.4","event":"close","code":1006,"reason":""}
+{"t":"88.4","event":"error","message":""}
+{"t":"88.4","event":"close","code":1006,"reason":""}
+{"t":"89.4","event":"error","message":""}
+{"t":"89.4","event":"close","code":1006,"reason":""}
+{"t":"90.4","event":"error","message":""}
+{"t":"90.4","event":"close","code":1006,"reason":""}
+{"t":"92.2","event":"error","message":""}
+{"t":"92.2","event":"close","code":1006,"reason":""}
+{"t":"96.2","event":"open","ms":3027}
+{"t":"96.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"97.2","event":"error","message":""}
+{"t":"97.2","event":"close","code":1006,"reason":""}
+{"t":"98.3","event":"open","ms":18}
+{"t":"98.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"99.3","event":"error","message":""}
+{"t":"99.3","event":"close","code":1006,"reason":""}
+{"t":"100.3","event":"error","message":""}
+{"t":"100.3","event":"close","code":1006,"reason":""}
+{"t":"101.3","event":"open","ms":7}
+{"t":"101.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"102.3","event":"error","message":""}
+{"t":"102.3","event":"close","code":1006,"reason":""}
+{"t":"103.3","event":"open","ms":7}
+{"t":"103.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"104.3","event":"open","ms":7}
+{"t":"104.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"105.3","event":"error","message":""}
+{"t":"105.3","event":"close","code":1006,"reason":""}
+{"t":"106.3","event":"open","ms":21}
+{"t":"106.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"107.3","event":"open","ms":6}
+{"t":"107.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"108.3","event":"open","ms":7}
+{"t":"108.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"109.3","event":"open","ms":7}
+{"t":"109.3","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"110.4","event":"error","message":""}
+{"t":"110.4","event":"close","code":1006,"reason":""}
+{"t":"111.4","event":"open","ms":8}
+{"t":"111.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"112.4","event":"error","message":""}
+{"t":"112.4","event":"close","code":1006,"reason":""}
+{"t":"113.4","event":"error","message":""}
+{"t":"113.4","event":"close","code":1006,"reason":""}
+{"t":"114.4","event":"open","ms":7}
+{"t":"114.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"115.4","event":"error","message":""}
+{"t":"115.4","event":"close","code":1006,"reason":""}
+{"t":"116.4","event":"open","ms":20}
+{"t":"116.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"117.4","event":"open","ms":6}
+{"t":"117.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"118.4","event":"open","ms":6}
+{"t":"118.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"119.4","event":"open","ms":8}
+{"t":"119.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"120.4","event":"open","ms":7}
+{"t":"120.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"121.4","event":"open","ms":7}
+{"t":"121.4","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"122.4","event":"error","message":""}
+{"t":"122.4","event":"close","code":1006,"reason":""}
+{"t":"123.5","event":"open","ms":14}
+{"t":"123.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"124.5","event":"open","ms":24}
+{"t":"124.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"125.5","event":"error","message":""}
+{"t":"125.5","event":"close","code":1006,"reason":""}
+{"t":"126.5","event":"open","ms":8}
+{"t":"126.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"127.5","event":"error","message":""}
+{"t":"127.5","event":"close","code":1006,"reason":""}
+{"t":"128.5","event":"open","ms":7}
+{"t":"128.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"129.5","event":"open","ms":7}
+{"t":"129.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"130.5","event":"open","ms":7}
+{"t":"130.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"131.5","event":"open","ms":7}
+{"t":"131.5","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"132.6","event":"open","ms":8}
+{"t":"132.6","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"133.6","event":"open","ms":8}
+{"t":"133.6","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"134.6","event":"error","message":""}
+{"t":"134.6","event":"close","code":1006,"reason":""}
+{"t":"135.6","event":"error","message":""}
+{"t":"135.6","event":"close","code":1006,"reason":""}
+{"t":"136.6","event":"open","ms":22}
+{"t":"136.6","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"137.6","event":"error","message":""}
+{"t":"137.6","event":"close","code":1006,"reason":""}
+{"t":"138.6","event":"open","ms":6}
+{"t":"138.6","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"139.6","event":"error","message":""}
+{"t":"139.6","event":"close","code":1006,"reason":""}
+{"t":"140.6","event":"open","ms":6}
+{"t":"140.6","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"141.6","event":"open","ms":7}
+{"t":"141.6","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"142.6","event":"error","message":""}
+{"t":"142.6","event":"close","code":1006,"reason":""}
+{"t":"143.6","event":"error","message":""}
+{"t":"143.6","event":"close","code":1006,"reason":""}
+{"t":"144.7","event":"open","ms":23}
+{"t":"144.7","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"145.7","event":"error","message":""}
+{"t":"145.7","event":"close","code":1006,"reason":""}
+{"t":"146.7","event":"open","ms":8}
+{"t":"146.7","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"147.7","event":"error","message":""}
+{"t":"147.7","event":"close","code":1006,"reason":""}
+{"t":"148.7","event":"error","message":""}
+{"t":"148.7","event":"close","code":1006,"reason":""}
+{"t":"149.7","event":"error","message":""}
+{"t":"149.7","event":"close","code":1006,"reason":""}
+{"t":"150.7","event":"open","ms":7}
+{"t":"150.7","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"152.0","event":"open","ms":257}
+{"t":"152.0","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"153.0","event":"error","message":""}
+{"t":"153.0","event":"close","code":1006,"reason":""}
+{"t":"154.0","event":"error","message":""}
+{"t":"154.0","event":"close","code":1006,"reason":""}
+{"t":"155.0","event":"error","message":""}
+{"t":"155.0","event":"close","code":1006,"reason":""}
+{"t":"156.0","event":"open","ms":37}
+{"t":"156.0","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"157.0","event":"open","ms":7}
+{"t":"157.0","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"158.0","event":"error","message":""}
+{"t":"158.0","event":"close","code":1006,"reason":""}
+{"t":"159.0","event":"open","ms":8}
+{"t":"159.0","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"160.0","event":"error","message":""}
+{"t":"160.0","event":"close","code":1006,"reason":""}
+{"t":"161.1","event":"open","ms":7}
+{"t":"161.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"162.1","event":"open","ms":7}
+{"t":"162.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"163.1","event":"open","ms":8}
+{"t":"163.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"164.1","event":"open","ms":8}
+{"t":"164.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"165.1","event":"open","ms":8}
+{"t":"165.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"166.1","event":"open","ms":24}
+{"t":"166.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"167.1","event":"error","message":""}
+{"t":"167.1","event":"close","code":1006,"reason":""}
+{"t":"168.1","event":"open","ms":8}
+{"t":"168.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"169.1","event":"error","message":""}
+{"t":"169.1","event":"close","code":1006,"reason":""}
+{"t":"170.1","event":"open","ms":11}
+{"t":"170.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"171.1","event":"open","ms":6}
+{"t":"171.1","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"172.2","event":"error","message":""}
+{"t":"172.2","event":"close","code":1006,"reason":""}
+{"t":"173.2","event":"error","message":""}
+{"t":"173.2","event":"close","code":1006,"reason":""}
+{"t":"174.2","event":"open","ms":7}
+{"t":"174.2","event":"close","code":1012,"reason":"owner unavailable"}
+{"t":"175.2","event":"error","message":""}
+{"t":"175.2","event":"close","code":1006,"reason":""}
+{"t":"176.2","event":"error","message":""}
+{"t":"176.2","event":"close","code":1006,"reason":""}
+{"t":"177.2","event":"error","message":""}
+{"t":"177.2","event":"close","code":1006,"reason":""}
+{"t":"178.2","event":"error","message":""}
+{"t":"178.2","event":"close","code":1006,"reason":""}
+{"t":"179.2","event":"open","ms":22}
+{"t":"179.2","event":"close","code":1012,"reason":"owner unavailable"}
