@@ -1,0 +1,14 @@
+# Resolves hiddenfield.dev through Cloudflare's public resolvers inside the
+# cluster: the LAN resolver (192.168.2.53) answers NXDOMAIN for it. Remove
+# once that resolver answers.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  hiddenfield.server: |
+    hiddenfield.dev:53 {
+      forward . 1.1.1.1 1.0.0.1
+      cache 60
+    }

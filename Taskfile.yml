@@ -242,6 +242,7 @@ tasks:
         kubectl --context {{.K3S_CONTEXT}} -n cert-manager create secret generic cloudflare-api-token
         --from-literal=token="$CLOUDFLARE_API_TOKEN" --dry-run=client -o yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
       - sed "s/LETSENCRYPT_EMAIL/$LETSENCRYPT_EMAIL/" deploy/k3s/gateway.yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - kubectl --context {{.K3S_CONTEXT}} apply -f deploy/k3s/coredns-custom.yaml
       - deploy/k3s/auth-secrets.sh
       - kubectl --context {{.K3S_CONTEXT}} apply -f deploy/k3s/dex.yaml
       - kubectl --context {{.K3S_CONTEXT}} apply -k config
