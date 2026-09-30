@@ -7,6 +7,9 @@ vars:
   KIND_CLUSTER: kodo
   SPIKE_BUCKET: kodo-celld-spike
   SPIKE_NS: kodo-spike
+  K3S_CONTEXT: default
+  TARGET: kind
+  CONTEXT: '{{if eq .TARGET "kind"}}kind-{{.KIND_CLUSTER}}{{else}}{{.K3S_CONTEXT}}{{end}}'
   VERSION:
     sh: git describe --tags --always --dirty 2>/dev/null || echo dev
   COMMIT:
@@ -121,3 +124,85 @@ tasks:
     cmds:
       - mkdir -p spike/celld/results/ci
       - spike/celld/scripts/kill-test.sh spike/celld/results/ci/kill.log {{.SECONDS | default 60}}
+
+  kernel:install:
+    desc: Install the kernel's development dependencies
+    dir: kernel
+    sources: [package.json, package-lock.json]
+    cmds:
+      - npm ci
+
+  kernel:check:
+    desc: Typecheck the kernel and run its tests under celld dev (needs celld and esbuild)
+    dir: kernel
+    deps: [kernel:install]
+    cmds:
+      - npm run typecheck
+      - npm test
+
+  fleet:up:
+    desc: Start a kodo fleet on TARGET=kind (default, creates the cluster) or TARGET=k3s; nodes become ready once the kernel is deployed
+    cmds:
+      - task: '{{if eq .TARGET "kind"}}kind:up{{else}}fleet:noop{{end}}'
+      - kubectl --context {{.CONTEXT}} create namespace kodo --dry-run=client -o yaml | kubectl --context {{.CONTEXT}} apply -f -
+      - task: fleet:bucket:{{.TARGET}}
+      - kubectl --context {{.CONTEXT}} apply -k deploy/fleet/{{.TARGET}}
+
+  fleet:wait:
+    desc: Wait for every fleet node on TARGET to be ready
+    cmds:
+      - kubectl --context {{.CONTEXT}} -n kodo rollout status sts/celld --timeout=300s
+
+  fleet:bucket:kind:
+    internal: true
+    cmds:
+      - kubectl --context {{.CONTEXT}} -n kodo apply -f deploy/fleet/kind/seaweedfs.yaml
+      - kubectl --context {{.CONTEXT}} -n kodo rollout status deploy/seaweedfs --timeout=180s
+      - >-
+        kubectl --context {{.CONTEXT}} -n kodo run mkbucket --rm -i --restart=Never
+        --image=curlimages/curl:8.16.0 --command -- curl -s -o /dev/null -w '%{http_code}\n'
+        -X PUT --aws-sigv4 aws:amz:us-east-1:s3 --user devkey:devsecret http://seaweedfs:8333/kodo-ci
+
+  fleet:bucket:k3s:
+    internal: true
+    cmds:
+      - >-
+        kubectl --context {{.CONTEXT}} -n kodo create secret generic celld-bucket --from-env-file=.env
+        --dry-run=client -o yaml | kubectl --context {{.CONTEXT}} apply -f -
+
+  fleet:noop:
+    internal: true
+    cmds: []
+
+  fleet:down:
+    desc: Delete the kodo namespace on TARGET (the bucket is left untouched)
+    cmds:
+      - kubectl --context {{.CONTEXT}} delete namespace kodo
+
+  kernel:deploy:
+    desc: Deploy the kernel to the fleet bucket of TARGET (needs celld and esbuild)
+    cmds:
+      - deploy/fleet/with-bucket.sh {{.TARGET}} celld deploy kernel
+
+  kernel:smoke:
+    desc: Serve the fixture gadget from a new cell on TARGET and check it answers
+    cmds:
+      - deploy/fleet/smoke.sh {{.TARGET}} {{.CONTEXT}}
+
+  kernel:up:
+    desc: Fleet, kernel and smoke test on TARGET in one go
+    cmds:
+      - task: fleet:up
+      - task: kernel:deploy
+      - task: fleet:wait
+      - task: kernel:smoke
+
+  gadget:put:
+    desc: Upload a gadget bundle to TARGET and print its digest (FILE=path)
+    cmds:
+      - deploy/fleet/gadget.sh {{.TARGET}} put {{.FILE}}
+
+  cell:bind:
+    desc: Bind a cell to a bundle on TARGET (CELL=id BUNDLE=digest)
+    cmds:
+      - deploy/fleet/gadget.sh {{.TARGET}} bind {{.CELL}} {{.BUNDLE}}

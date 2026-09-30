@@ -1,0 +1,19 @@
+# The fleet on the k3s cluster: gVisor and the kodo-dev Tigris bucket. The
+# celld-bucket Secret is created from .env by `task fleet:up TARGET=k3s`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../base
+configMapGenerator:
+  - name: celld-config
+    namespace: kodo
+    literals:
+      - BUCKET=kodo-dev
+patches:
+  - target:
+      kind: StatefulSet
+      name: celld
+    patch: |-
+      - op: add
+        path: /spec/template/spec/runtimeClassName
+        value: gvisor

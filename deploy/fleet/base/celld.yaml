@@ -1,0 +1,133 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: celld
+  namespace: kodo
+spec:
+  selector:
+    app: celld
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Governing Service for the StatefulSet. Peers find each other through the
+# bucket, so this only gives the pods stable names.
+apiVersion: v1
+kind: Service
+metadata:
+  name: celld-peers
+  namespace: kodo
+spec:
+  clusterIP: None
+  selector:
+    app: celld
+  ports:
+    - name: internal
+      port: 8081
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: celld
+  namespace: kodo
+spec:
+  serviceName: celld-peers
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: celld
+  template:
+    metadata:
+      labels:
+        app: celld
+    spec:
+      automountServiceAccountToken: false
+      # Must exceed CELLD_SHUTDOWN_TOTAL_MS (40s) so the handoff finishes before SIGKILL.
+      terminationGracePeriodSeconds: 60
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: celld
+      containers:
+        - name: celld
+          image: ghcr.io/denoland/celld:0.6.0
+          args:
+            # celld does not accept the --flag=value form.
+            - --bucket
+            - s3://$(BUCKET)
+            - --listen
+            - 0.0.0.0:8080
+            - --internal-listen
+            - $(POD_IP):8081
+            - --advertise
+            - $(POD_IP):8081
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: celld-config
+                  key: BUCKET
+            - name: AWS_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: celld-bucket
+                  key: AWS_REGION
+            - name: CELLD_WATCH
+              value: /var/lib/celld/state
+            - name: CELLD_IDLE_EVICT_S
+              value: "30"
+            - name: S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: celld-bucket
+                  key: AWS_ENDPOINT_URL_S3
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: celld-bucket
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: celld-bucket
+                  key: AWS_SECRET_ACCESS_KEY
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: internal
+              containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /.well-known/celld/health
+              port: http
+            periodSeconds: 2
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/celld
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 2Gi
