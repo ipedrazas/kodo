@@ -43,7 +43,6 @@ spec:
       labels:
         app: celld
     spec:
-      runtimeClassName: gvisor
       automountServiceAccountToken: false
       # Must exceed CELLD_SHUTDOWN_TOTAL_MS (40s) so the handoff finishes before SIGKILL.
       terminationGracePeriodSeconds: 60
@@ -61,8 +60,6 @@ spec:
             # celld does not accept the --flag=value form.
             - --bucket
             - s3://$(BUCKET)
-            - --region
-            - auto
             - --listen
             - 0.0.0.0:8080
             - --internal-listen
@@ -75,7 +72,15 @@ spec:
                 fieldRef:
                   fieldPath: status.podIP
             - name: BUCKET
-              value: kodo-celld-spike
+              valueFrom:
+                configMapKeyRef:
+                  name: celld-config
+                  key: BUCKET
+            - name: AWS_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: celld-bucket
+                  key: AWS_REGION
             - name: CELLD_WATCH
               value: /var/lib/celld/state
             - name: CELLD_IDLE_EVICT_S

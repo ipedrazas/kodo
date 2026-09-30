@@ -1,0 +1,6 @@
+{"t":"0.5","event":"open","ms":506}
+{"t":"0.8","event":"message","n":1,"echo":"first"}
+{"t":"60.2","event":"message","n":2,"echo":"after-60s-idle"}
+{"t":"90.9","event":"close","code":1012,"reason":"service restart"}
+{"t":"92.3","event":"open","ms":355}
+{"t":"92.6","event":"message","n":3,"echo":"after-reconnect"}

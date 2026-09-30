@@ -11,7 +11,7 @@ Durable decisions that apply across all phases:
 - **Runtime**: celld. A **fleet** is a set of celld nodes sharing one bucket prefix and running one application. celld owns single-writer ownership, placement, hibernation, failover, rebalancing and memory-pressure eviction; we configure and verify these, we do not build them.
 - **Kernel**: the one application every fleet runs. It is a Worker, written in TypeScript, that routes requests, authorises them, loads gadget bundles and hands each gadget its capabilities. It replaces the Go cell router.
 - **Gadget API**: our own, not Cloudflare OS compatibility. A gadget is a bundle whose main module exports a Durable Object class. The kernel loads it by digest with the Worker Loader and runs it as a facet of its cell, with its own SQLite database, no ambient network, and only the bindings the kernel passes in.
-- **Cell**: one kernel Durable Object per gadget instance, holding the instance's Blueprint version and grants, with the gadget as its facet. Facets cannot set alarms, so the cell holds any schedule on the gadget's behalf.
+- **Cell**: one kernel Durable Object per gadget instance, holding the instance's Blueprint version and grants, with the gadget as its facet. Facets cannot set alarms or hold WebSockets in celld 0.6.0, so the cell holds schedules and WebSockets on the gadget's behalf and passes events to it as calls. Every call into a gadget is bounded in time and answered with an error rather than left hanging.
 - **State**: everything durable lives in the bucket. There is no database. The per-workspace registry of cells, owners, shares and grants is itself a Durable Object (one per Workspace).
 - **Key models**: Fleet, Workspace, Blueprint (name, version, bundle digest, capabilities, tier), Cell (workspace, cell id, blueprint version, owner), Grant (user, cell, capability), Share (user, cell, role).
 - **Go services**: the operator, the Gatekeeper and a small metrics exporter. Go does not sit on the request path to a gadget.
@@ -28,7 +28,9 @@ Durable decisions that apply across all phases:
 - **Egress**: default-deny NetworkPolicy on fleet pods; egress only to the Gatekeeper, the inference gateway and the bucket endpoint. celld's internal listener is unauthenticated for operator actions, so it is reachable only from pods of the same fleet.
 - **Upgrades**: mixed celld versions cannot share a fleet, so a celld upgrade stops a fleet and restarts it. Kernel deployments roll without a restart.
 - **Metric labels**: workspace and blueprint only; user and cell detail lives in traces, logs and audit.
-- **Environments**: kind with MinIO for local development and CI; the k3s cluster with gVisor and Tigris for integration, performance and demos.
+- **Environments**: kind with SeaweedFS for local development and CI (MinIO no longer publishes images); the k3s cluster with gVisor and Tigris for integration, performance and demos.
+- **Node disks**: fleet nodes need low fsync latency; celld's write latency and follower health follow it directly (Phase 1 measured about 100 ms per fsync on the k3s nodes and 120 ms per write).
+- **Loaded code is memory**: each distinct gadget bundle costs about 7 MiB per node in celld 0.6.0 and is not released, so the number of distinct bundles a fleet serves is bounded by node memory until upstream fixes it.
 - **Out of scope for v1**: the container tier, the wider Cloudflare API surface as a gadget-facing API, multi-region fleets.
 
 ---
@@ -39,23 +41,9 @@ See [spike/celld/README.md](../spike/celld/README.md). Verdict: go. No committed
 
 ---
 
-## Phase 1: Spike follow-ups and storage check
+## Phase 1: Spike follow-ups and storage check (done)
 
-**User stories**: open problems from Phase 0; storage compatibility.
-
-### What to build
-
-Close what Phase 0 left open before building on it. Try to reproduce the hang with a repeatable script and find whether it is celld or our code. Measure what the spike did not: cold activation against database size, the cause of the 100 ms warm write, behaviour at the 256 Dynamic Worker limit, and WebSockets across hibernation and failover. Run `celld diagnose` and the spike's durability run against MinIO in kind as a CI job, and against AWS S3 once.
-
-### Acceptance criteria
-
-- [ ] The hang is either explained and avoided, or reproducible on demand and reported upstream with a workaround in place
-- [ ] Gadget cold activation measured at several database sizes, and the 300 ms target confirmed, revised or given a concrete path
-- [ ] Warm write latency explained
-- [ ] Behaviour with more distinct bundles than the Dynamic Worker limit is known
-- [ ] A WebSocket to a gadget survives hibernation, and its behaviour on failover is documented
-- [ ] CI brings up a fleet on kind with MinIO and runs the kill test with no lost writes
-- [ ] `celld diagnose` passes on Tigris, MinIO and AWS S3
+See [spike/celld/PHASE1.md](../spike/celld/PHASE1.md). Durability held throughout; density did not. celld 0.6.0 has four problems, drafted as a report to its maintainers: facet calls that hang after a burst, loaded bundles that are never released (about 100 distinct bundles per 1 GiB node before the fleet refuses everything), no WebSockets inside facets, and a panic on surviving nodes after an owner is killed. Cold gadget activation is about 0.8 s plus 0.1 s per MiB, so the 300 ms target is replaced by cold p50 under 1 s for gadgets under 1 MiB. Warm write latency is the node disks. CI runs a fleet on kind with SeaweedFS. Still open: `celld diagnose` against AWS S3.
 
 ---
 
@@ -74,7 +62,8 @@ The kernel as a real project in the repository, with its build, tests and deploy
 - [ ] The gadget sees no bindings and cannot make outbound connections
 - [ ] A gadget error or an unknown bundle produces a clear response and does not affect other cells
 - [ ] An idle cell hibernates and the next request restores its state
-- [ ] WebSocket connections reach the gadget
+- [ ] WebSocket connections reach the gadget through the cell, which holds the socket
+- [ ] A gadget call that hangs is answered with an error within a bounded time, and the cell keeps serving other calls
 - [ ] Kernel tests run in CI; deploys to kind and to k3s under gVisor from one task
 
 ---
@@ -94,7 +83,7 @@ The Workspace registry and the first version of the API. Publishing a Blueprint 
 - [ ] A new Blueprint version does not alter existing cells; a cell can be moved to it explicitly
 - [ ] A Workspace lists its cells and enforces a cell quota
 - [ ] A cell not in any registry is not served
-- [ ] The gadget API document matches what the kernel enforces, with a sample gadget that uses all of it
+- [ ] The gadget API document matches what the kernel enforces, with a sample gadget that uses all of it, including WebSocket messages and scheduled events delivered by the cell
 
 ---
 
@@ -141,6 +130,8 @@ Gateway API with OIDC against a customer IdP (Dex in kind), the wildcard certifi
 ## Phase 6: Autoscaling and observability
 
 **User stories**: density; scaling on cells, not CPU; metrics and traces.
+
+**Checkpoint before starting**: decide again on celld based on what upstream has fixed of the Phase 1 problems, in particular the unreleased bundle memory, which caps density.
 
 ### What to build
 

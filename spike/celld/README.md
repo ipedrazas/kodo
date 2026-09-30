@@ -1,5 +1,7 @@
 # Phase 0: celld spike
 
+Follow-ups, including where the hang below comes from: [PHASE1.md](PHASE1.md).
+
 Sep 30, 2026. celld 0.6.0, three nodes on the k3s cluster (3 × 4 CPU / 8 GiB, amd64), Tigris bucket `kodo-celld-spike`.
 
 ## Verdict
@@ -16,7 +18,7 @@ Three things stand against an unconditional go:
 
 - `app/`: one celld application with a plain `Counter` Durable Object and a `Cell` Durable Object. `Cell` fetches a gadget bundle from object storage by SHA-256 digest, loads it with the Worker Loader, and runs its `App` class as a facet with `env: {}` and `globalOutbound: null`.
 - `gadgets/notes.js`: a sample gadget that counts requests in its own SQLite database and reports the bindings and network it can see.
-- `k8s/celld.yaml`: a three-replica StatefulSet under the `gvisor` RuntimeClass with a 2 GiB `local-path` volume each and idle eviction at 30 s.
+- `k8s/base` with the `k8s/k3s` overlay (was `k8s/celld.yaml`): a three-replica StatefulSet under the `gvisor` RuntimeClass with a 2 GiB `local-path` volume each and idle eviction at 30 s.
 - `scripts/`: the load scripts (run inside a client pod in the same namespace) and the checkers. Raw output is in `results/`.
 
 Reproduce with `task spike:deploy` and `task spike:up`; `task spike:down` removes the namespace.

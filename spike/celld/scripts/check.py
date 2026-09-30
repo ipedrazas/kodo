@@ -33,3 +33,6 @@ print(f"acked={len(times)} errors={errors} lost={lost}")
 print(f"latency p50={statistics.median(times)*1000:.0f}ms p95={times[int(len(times)*0.95)]*1000:.0f}ms max={times[-1]*1000:.0f}ms")
 for ts, cell, secs in slow:
     print(f"slow: t={ts} cell={cell} {secs:.2f}s")
+
+if lost or not times:
+    sys.exit(1)
