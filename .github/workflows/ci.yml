@@ -43,26 +43,12 @@ jobs:
   # under write load and the job fails if an acknowledged write was lost.
   fleet:
     runs-on: ubuntu-latest
-    env:
-      CELLD_VERSION: v0.6.0
     steps:
       - uses: actions/checkout@v4
-      - uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/setup-celld
       - uses: helm/kind-action@v1
         with:
           install_only: true
-      - name: Install celld and esbuild
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download "$CELLD_VERSION" -R denoland/celld -p 'celld-x86_64-unknown-linux-gnu.gz' -O - |
-            gunzip > /usr/local/bin/celld
-          chmod +x /usr/local/bin/celld
-          celld --version
-          npm install -g esbuild
       - run: task spike:kind:up
       - run: task spike:kill-test
       - name: Collect diagnostics
@@ -78,3 +64,32 @@ jobs:
         with:
           name: fleet-results
           path: spike/celld/results/ci/
+
+  # Kernel typecheck and tests under celld dev.
+  kernel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/setup-celld
+      - run: task kernel:check
+
+  # The kernel on a three-node fleet on kind, checked end to end.
+  kernel-kind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-celld
+      - uses: helm/kind-action@v1
+        with:
+          install_only: true
+      - run: task kernel:up TARGET=kind
+      - name: Collect diagnostics
+        if: failure()
+        run: |
+          kubectl --context kind-kodo -n kodo get pods -o wide || true
+          for p in celld-0 celld-1 celld-2; do
+            kubectl --context kind-kodo -n kodo logs "$p" --tail=200 || true
+          done

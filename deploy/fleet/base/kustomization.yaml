@@ -1,0 +1,7 @@
+# A celld fleet running the kodo kernel. Overlays add the bucket (the
+# celld-config ConfigMap and celld-bucket Secret) and the runtime class.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kodo
+resources:
+  - celld.yaml

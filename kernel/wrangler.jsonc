@@ -1,0 +1,22 @@
+{
+  "name": "kodo-kernel",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "vars": {
+    // A gadget call that has not answered after this long is aborted.
+    "GADGET_CALL_TIMEOUT_MS": "30000",
+    // CPU time a gadget may use per call.
+    "GADGET_CPU_MS": "5000"
+  },
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "r2_buckets": [
+    // Gadget bundles, keyed sha256/<digest>.js.
+    { "binding": "BUNDLES", "bucket_name": "bundles" },
+    // Cell manifests, keyed <cell-id>.json. Written by hand until Phase 3.
+    { "binding": "CELLS", "bucket_name": "cells" }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "CELL", "class_name": "Cell" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Cell"] }]
+}
