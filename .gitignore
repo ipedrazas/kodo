@@ -41,3 +41,6 @@ node_modules/
 
 # End-to-end results
 test/e2e/results/
+
+# Identity test credentials
+.auth.env

@@ -1,0 +1,118 @@
+# Dex as the LAN identity provider, at https://auth.hiddenfield.dev, with two
+# static test users. The dex-secrets Secret (created by `task auth:secrets`)
+# holds the client secret and the users' password hashes.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kodo-auth
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dex
+  namespace: kodo-auth
+data:
+  config.yaml: |
+    issuer: https://auth.hiddenfield.dev
+    storage:
+      type: memory
+    web:
+      http: 0.0.0.0:5556
+    expiry:
+      idTokens: 1h
+      refreshTokens:
+        validIfNotUsedFor: 168h
+    oauth2:
+      skipApprovalScreen: true
+    enablePasswordDB: true
+    staticClients:
+      - id: kodo
+        name: kodo
+        secretEnv: DEX_CLIENT_SECRET
+        redirectURIs:
+          - https://app.hiddenfield.dev/oauth2/callback
+    staticPasswords:
+      - email: alice@hiddenfield.dev
+        username: alice
+        userID: 7d1f3b0c-alice
+        hashFromEnv: ALICE_PASSWORD_HASH
+      - email: bob@hiddenfield.dev
+        username: bob
+        userID: 9a4e6c2d-bob
+        hashFromEnv: BOB_PASSWORD_HASH
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+  namespace: kodo-auth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dex
+  template:
+    metadata:
+      labels:
+        app: dex
+      annotations:
+        # Changes when the config does, so Dex restarts to read it.
+        kodo.dev/config-version: "1"
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: dex
+          image: ghcr.io/dexidp/dex:v2.45.1
+          args: [dex, serve, /etc/dex/config.yaml]
+          envFrom:
+            - secretRef:
+                name: dex-secrets
+          ports:
+            - name: http
+              containerPort: 5556
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 5556
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1001
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/dex
+      volumes:
+        - name: config
+          configMap:
+            name: dex
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+  namespace: kodo-auth
+spec:
+  selector:
+    app: dex
+  ports:
+    - name: http
+      port: 5556
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dex
+  namespace: kodo-auth
+spec:
+  parentRefs:
+    - name: kodo
+      namespace: kodo-gateway
+      sectionName: https
+  hostnames:
+    - auth.hiddenfield.dev
+  rules:
+    - backendRefs:
+        - name: dex
+          port: 5556

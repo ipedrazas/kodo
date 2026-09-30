@@ -12,4 +12,9 @@ export interface Env {
   KEYS: DurableObjectNamespace<Keys>;
   GADGET_CALL_TIMEOUT_MS: string;
   GADGET_CPU_MS: string;
+  // Identity settings; see config.ts. Normally set at deploy time instead.
+  OIDC_ISSUER?: string;
+  OIDC_AUDIENCE?: string;
+  OIDC_JWKS_URL?: string;
+  ADMIN_TOKEN_SHA256?: string;
 }

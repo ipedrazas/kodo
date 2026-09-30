@@ -2,7 +2,7 @@
 # Runs a celld command against the fleet bucket of TARGET, appending the
 # bucket flags. For kind it port-forwards to SeaweedFS for the duration.
 # usage: with-bucket.sh k3s|kind COMMAND...
-#   e.g. with-bucket.sh kind celld deploy kernel
+#   e.g. with-bucket.sh kind kernel/scripts/deploy.sh
 set -euo pipefail
 target=$1
 shift

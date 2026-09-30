@@ -46,6 +46,23 @@ type FleetSpec struct {
 	// StorageClassName for the node volumes; the cluster default if unset.
 	// +optional
 	StorageClassName *string `json:"storageClassName,omitempty"`
+
+	// Auth is the OIDC provider whose ID tokens the kernel accepts. Without
+	// it only the operator's admin token is accepted.
+	// +optional
+	Auth *AuthSpec `json:"auth,omitempty"`
+}
+
+// AuthSpec configures how the kernel verifies callers.
+type AuthSpec struct {
+	// Issuer is the OIDC issuer URL, e.g. https://auth.example.com.
+	Issuer string `json:"issuer"`
+	// Audience is the OIDC client id the gateway logs users in with.
+	Audience string `json:"audience"`
+	// JWKSURL is where the kernel fetches the issuer's signing keys; it may
+	// be an in-cluster URL. Defaults to <issuer>/keys.
+	// +optional
+	JWKSURL string `json:"jwksURL,omitempty"`
 }
 
 // BucketSpec locates the fleet's bucket and its credentials.

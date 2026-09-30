@@ -2,27 +2,43 @@ import { DurableObject } from "cloudflare:workers";
 import type { BlueprintVersion } from "./catalog";
 import type { Env } from "./env";
 import { GADGET_RUNTIME, cellProps } from "./host";
-import { CELL_HEADER, sha256Hex, text } from "./http";
+import { CALLER_HEADER, CELL_HEADER, sha256Hex, text } from "./http";
+import type { Caller } from "./identity";
+import type { Owner, ShareRole } from "./workspace";
 
 // What a gadget may implement. `fetch` serves HTTP; the other handlers are
 // optional and are called by the cell on the gadget's behalf.
 interface Gadget {
   fetch(request: Request): Promise<Response>;
-  onMessage(socket: string, message: string | ArrayBuffer): Promise<string | ArrayBuffer | undefined>;
+  onMessage(socket: string, message: string | ArrayBuffer, caller: GadgetCaller): Promise<string | ArrayBuffer | undefined>;
   onClose(socket: string, code: number, reason: string): Promise<void>;
   onAlarm(): Promise<void>;
 }
 
-// What a cell runs, set by its workspace.
+// What a cell runs and who may use it, set by its workspace.
 export interface CellBinding {
   workspace: string;
   blueprint: BlueprintVersion;
+  owner: Owner;
+  shares: Record<string, ShareRole>;
+}
+
+type Role = "owner" | ShareRole;
+
+// Who is calling, as the gadget sees it: no credential, just identity.
+interface GadgetCaller {
+  user: string;
+  email: string;
+  role: Role;
 }
 
 interface SocketAttachment {
   cell: string;
   socket: string;
+  caller: GadgetCaller;
 }
+
+const READ_METHODS = new Set(["GET", "HEAD"]);
 
 // A failed gadget call, with the HTTP status that reports it.
 class GadgetError extends Error {
@@ -61,6 +77,12 @@ export class Cell extends DurableObject<Env> {
     this.restart();
   }
 
+  // Called by the workspace when the cell's shares change.
+  async setShares(shares: Record<string, ShareRole>): Promise<void> {
+    const binding = this.binding();
+    if (binding) this.ctx.storage.kv.put("binding", { ...binding, shares });
+  }
+
   // Called by the workspace to delete the cell and its gadget's storage.
   async unbind(): Promise<void> {
     this.restart();
@@ -80,14 +102,28 @@ export class Cell extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     const cell = request.headers.get(CELL_HEADER);
-    if (!cell) return text(400, "request did not come through the kernel router");
+    const callerHeader = request.headers.get(CALLER_HEADER);
+    if (!cell || !callerHeader) return text(400, "request did not come through the kernel router");
+    const binding = this.binding();
+    if (!binding) return text(404, `cell ${cell} does not exist`);
+    const caller = gadgetCaller(JSON.parse(callerHeader) as Caller, binding);
+    if (!caller) return text(403, `cell ${cell} is not shared with you`);
+    const upgrade = request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+    if (caller.role === "viewer" && (upgrade || !READ_METHODS.has(request.method))) {
+      return text(403, "viewers can only read this cell");
+    }
     try {
-      if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+      if (upgrade) {
         await this.load(cell);
-        return this.acceptSocket(cell);
+        return this.acceptSocket(cell, caller);
       }
-      const forwarded = new Request(request);
-      forwarded.headers.delete(CELL_HEADER);
+      const headers = new Headers(request.headers);
+      headers.delete(CELL_HEADER);
+      headers.delete(CALLER_HEADER);
+      headers.set("x-kodo-user", caller.user);
+      headers.set("x-kodo-email", caller.email);
+      headers.set("x-kodo-role", caller.role);
+      const forwarded = new Request(request, { headers });
       return await this.call(cell, (gadget) => gadget.fetch(forwarded));
     } catch (err) {
       if (err instanceof GadgetError) return text(err.status, err.message);
@@ -96,9 +132,9 @@ export class Cell extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    const { cell, socket } = ws.deserializeAttachment() as SocketAttachment;
+    const { cell, socket, caller } = ws.deserializeAttachment() as SocketAttachment;
     try {
-      const reply = await this.call(cell, (gadget) => gadget.onMessage(socket, message));
+      const reply = await this.call(cell, (gadget) => gadget.onMessage(socket, message, caller));
       if (typeof reply === "string" || reply instanceof ArrayBuffer) ws.send(reply);
     } catch (err) {
       ws.close(CLOSE_GADGET_FAILED, err instanceof GadgetError ? err.message.slice(0, 120) : "gadget failed");
@@ -130,10 +166,10 @@ export class Cell extends DurableObject<Env> {
     }
   }
 
-  private acceptSocket(cell: string): Response {
+  private acceptSocket(cell: string, caller: GadgetCaller): Response {
     const [server, client] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ cell, socket: crypto.randomUUID() } satisfies SocketAttachment);
+    server.serializeAttachment({ cell, socket: crypto.randomUUID(), caller } satisfies SocketAttachment);
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -210,4 +246,13 @@ export class Cell extends DurableObject<Env> {
       clearTimeout(timer);
     }
   }
+}
+
+// The caller's role on the cell, or null if it is not theirs and not shared
+// with them. The admin token acts as the owner.
+function gadgetCaller(caller: Caller, binding: CellBinding): GadgetCaller | null {
+  if (caller.kind === "admin") return { user: "admin", email: "", role: "owner" };
+  if (caller.user === binding.owner.user) return { user: caller.user, email: caller.email, role: "owner" };
+  const shared = Object.hasOwn(binding.shares, caller.email) ? binding.shares[caller.email] : undefined;
+  return shared ? { user: caller.user, email: caller.email, role: shared } : null;
 }

@@ -18,18 +18,20 @@ done
 digest=$(api POST /bundles "@$root/kernel/examples/notes.js" | head -1 | sed -E 's/.*"digest":"([0-9a-f]+)".*/\1/')
 version="smoke-$(date +%s)"
 api PUT "/blueprints/notes/$version" "{\"bundle\":\"$digest\"}" >/dev/null
-cell=$(api POST /workspaces/smoke/cells "{\"blueprint\":\"notes\",\"version\":\"$version\"}" |
+owner='{"user":"smoke","email":"smoke@kodo.test"}'
+cell=$(api POST /workspaces/smoke/cells "{\"blueprint\":\"notes\",\"version\":\"$version\",\"owner\":$owner}" |
   head -1 | sed -E 's/.*"id":"([a-z0-9]+)".*/\1/')
 echo "cell $cell runs notes $version ($digest)"
+token=$("${k[@]}" get secret kernel-admin -o jsonpath='{.data.token}' | base64 -d)
 
-"${k[@]}" exec client -- curl -sS -m 30 -X POST -H "Host: $cell.g.kodo" --data-binary 'smoke test' http://celld/ >/dev/null
-notes=$("${k[@]}" exec client -- curl -sS -m 30 -H "Host: $cell.g.kodo" http://celld/)
+"${k[@]}" exec client -- curl -sS -m 30 -X POST -H "Host: $cell.g.kodo" -H "x-kodo-admin-token: $token" --data-binary 'smoke test' http://celld/ >/dev/null
+notes=$("${k[@]}" exec client -- curl -sS -m 30 -H "Host: $cell.g.kodo" -H "x-kodo-admin-token: $token" http://celld/)
 echo "notes: $notes"
 [[ $notes == '["smoke test"]' ]]
 
-"${k[@]}" exec client -- curl -sS -m 30 -X POST -H "Host: $cell.g.kodo" 'http://celld/remind?in=1000' >/dev/null
+"${k[@]}" exec client -- curl -sS -m 30 -X POST -H "Host: $cell.g.kodo" -H "x-kodo-admin-token: $token" 'http://celld/remind?in=1000' >/dev/null
 for _ in $(seq 1 20); do
-  status=$("${k[@]}" exec client -- curl -sS -m 30 -H "Host: $cell.g.kodo" http://celld/status)
+  status=$("${k[@]}" exec client -- curl -sS -m 30 -H "Host: $cell.g.kodo" -H "x-kodo-admin-token: $token" http://celld/status)
   [[ $status == *'"reminders":1'* ]] && break
   sleep 1
 done

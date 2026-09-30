@@ -155,6 +155,29 @@ func TestReconcileCreatesTheFleet(t *testing.T) {
 	if c := meta.FindStatusCondition(fleet.Status.Conditions, ConditionKernelDeployed); c == nil || c.Reason != "Deploying" {
 		t.Errorf("KernelDeployed condition: %+v", c)
 	}
+	var token corev1.Secret
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "kodo", Name: "kodo-admin-token"}, &token); err != nil || len(token.Data["token"]) < 32 {
+		t.Errorf("admin token Secret: %v, %d bytes", err, len(token.Data["token"]))
+	}
+}
+
+func TestKernelJobCarriesIdentitySettings(t *testing.T) {
+	f := testFleet()
+	f.Spec.Auth = &kodov1.AuthSpec{Issuer: "https://auth.example.com/", Audience: "kodo"}
+	env := map[string]corev1.EnvVar{}
+	for _, e := range desiredKernelJob(f).Spec.Template.Spec.Containers[0].Env {
+		env[e.Name] = e
+	}
+	if env["OIDC_ISSUER"].Value != "https://auth.example.com/" || env["OIDC_AUDIENCE"].Value != "kodo" ||
+		env["OIDC_JWKS_URL"].Value != "https://auth.example.com/keys" {
+		t.Errorf("identity env: %v", env)
+	}
+	if ref := env["KERNEL_ADMIN_TOKEN"].ValueFrom; ref == nil || ref.SecretKeyRef.Name != "kodo-admin-token" {
+		t.Error("admin token does not come from the Fleet's Secret")
+	}
+	if kernelJobName(f) == kernelJobName(testFleet()) {
+		t.Error("changing identity settings reuses the old deploy Job")
+	}
 }
 
 func TestCelldUpgradeStopsEveryNodeFirst(t *testing.T) {

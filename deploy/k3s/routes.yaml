@@ -1,0 +1,53 @@
+# app.hiddenfield.dev (the API) and every cell hostname go to the kodo fleet,
+# behind an OIDC login. One session cookie on .hiddenfield.dev covers the app
+# and every cell; the gateway forwards the ID token to the kernel in
+# x-kodo-identity, and the kernel verifies it and strips it, and the session
+# cookies, before anything reaches a gadget.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kodo
+  namespace: kodo
+spec:
+  parentRefs:
+    - name: kodo
+      namespace: kodo-gateway
+      sectionName: https
+    - name: kodo
+      namespace: kodo-gateway
+      sectionName: https-cells
+  hostnames:
+    - app.hiddenfield.dev
+    - "*.g.hiddenfield.dev"
+  rules:
+    - backendRefs:
+        - name: kodo
+          port: 80
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: kodo-login
+  namespace: kodo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kodo
+  oidc:
+    provider:
+      issuer: https://auth.hiddenfield.dev
+    clientID: kodo
+    clientSecret:
+      # The key must be client-secret.
+      name: oidc-client
+    scopes: [openid, email, profile, offline_access]
+    redirectURL: https://app.hiddenfield.dev/oauth2/callback
+    logoutPath: /logout
+    cookieDomain: hiddenfield.dev
+    cookieNames:
+      idToken: kodo-id
+      accessToken: kodo-access
+    forwardIDToken:
+      header: x-kodo-identity
+    refreshToken: true

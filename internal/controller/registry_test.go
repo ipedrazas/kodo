@@ -22,10 +22,12 @@ type fakeKernel struct {
 	answers map[string]kernelapi.Response
 	err     error
 	calls   []string
+	tokens  []string
 }
 
-func (k *fakeKernel) Do(_ context.Context, _, _, method, path string, _ any) (kernelapi.Response, error) {
+func (k *fakeKernel) Do(_ context.Context, t kernelapi.Target, method, path string, _ any) (kernelapi.Response, error) {
 	k.calls = append(k.calls, method+" "+path)
+	k.tokens = append(k.tokens, t.AdminToken)
 	if k.err != nil {
 		return kernelapi.Response{}, k.err
 	}
@@ -41,6 +43,14 @@ func answer(status int, body string) kernelapi.Response {
 
 const digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
+// adminToken is the fleet's admin token Secret the reconcilers read.
+func adminToken() *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "kodo-admin-token", Namespace: "kodo"},
+		Data:       map[string][]byte{"token": []byte("sesame")},
+	}
+}
+
 func publishBlueprint(t *testing.T, kernel *fakeKernel) (kodov1.Blueprint, ctrl.Result) {
 	t.Helper()
 	bp := &kodov1.Blueprint{
@@ -51,7 +61,7 @@ func publishBlueprint(t *testing.T, kernel *fakeKernel) (kodov1.Blueprint, ctrl.
 		},
 	}
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "notes", Namespace: "kodo"}, Data: map[string]string{"notes.js": "export class App {}"}}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(bp, cm).WithStatusSubresource(&kodov1.Blueprint{}).Build()
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(bp, cm, adminToken()).WithStatusSubresource(&kodov1.Blueprint{}).Build()
 	r := &BlueprintReconciler{Client: c, Kernel: kernel}
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bp)})
 	if err != nil {
@@ -112,7 +122,7 @@ func TestWorkspaceSyncs(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "team", Namespace: "kodo", Generation: 1},
 		Spec:       kodov1.WorkspaceSpec{Fleet: "kodo", Quota: 5},
 	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ws).WithStatusSubresource(&kodov1.Workspace{}).Build()
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ws, adminToken()).WithStatusSubresource(&kodov1.Workspace{}).Build()
 	kernel := &fakeKernel{answers: map[string]kernelapi.Response{
 		"PUT /workspaces/team": answer(200, `{"name":"team","quota":5,"cells":2}`),
 	}}
@@ -126,5 +136,8 @@ func TestWorkspaceSyncs(t *testing.T) {
 	}
 	if got.Status.Cells != 2 || meta.FindStatusCondition(got.Status.Conditions, ConditionSynced).Status != metav1.ConditionTrue {
 		t.Fatalf("status %+v", got.Status)
+	}
+	if kernel.tokens[0] != "sesame" {
+		t.Errorf("called the kernel with admin token %q", kernel.tokens[0])
 	}
 }

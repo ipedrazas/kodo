@@ -147,6 +147,9 @@ tasks:
       - task: '{{if eq .TARGET "kind"}}kind:up{{else}}fleet:noop{{end}}'
       - kubectl --context {{.CONTEXT}} create namespace kodo --dry-run=client -o yaml | kubectl --context {{.CONTEXT}} apply -f -
       - task: fleet:bucket:{{.TARGET}}
+      - >-
+        kubectl --context {{.CONTEXT}} -n kodo get secret kernel-admin >/dev/null 2>&1 ||
+        kubectl --context {{.CONTEXT}} -n kodo create secret generic kernel-admin --from-literal=token=$(openssl rand -hex 24)
       - kubectl --context {{.CONTEXT}} apply -k deploy/fleet/{{.TARGET}}
 
   fleet:wait:
@@ -183,7 +186,9 @@ tasks:
   kernel:deploy:
     desc: Deploy the kernel to the fleet bucket of TARGET (needs celld and esbuild)
     cmds:
-      - deploy/fleet/with-bucket.sh {{.TARGET}} celld deploy kernel
+      - >-
+        KERNEL_ADMIN_TOKEN=$(kubectl --context {{.CONTEXT}} -n kodo get secret kernel-admin -o jsonpath='{.data.token}' | base64 -d)
+        deploy/fleet/with-bucket.sh {{.TARGET}} kernel/scripts/deploy.sh
 
   kernel:smoke:
     desc: Publish the sample gadget on TARGET, create a cell from it and check it works

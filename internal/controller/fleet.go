@@ -3,6 +3,8 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -56,6 +58,9 @@ func (r *FleetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 	}
 
+	if err := r.ensureAdminToken(ctx, &fleet); err != nil {
+		return ctrl.Result{}, err
+	}
 	sts, requeue, err := r.reconcileNodes(ctx, &fleet)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -95,6 +100,29 @@ func (r *FleetReconciler) apply(ctx context.Context, fleet *kodov1.Fleet, obj cl
 		return controllerutil.SetControllerReference(fleet, obj, r.Scheme)
 	})
 	return err
+}
+
+// ensureAdminToken creates the Secret with the token the operator uses on the
+// kernel API, once; the kernel deploy Job gives the kernel its hash.
+func (r *FleetReconciler) ensureAdminToken(ctx context.Context, fleet *kodov1.Fleet) error {
+	key := client.ObjectKey{Namespace: fleet.Namespace, Name: AdminTokenSecretName(fleet)}
+	var secret corev1.Secret
+	err := r.Get(ctx, key, &secret)
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+	token := make([]byte, 24)
+	if _, err := rand.Read(token); err != nil {
+		return err
+	}
+	secret = corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: nodeLabels(fleet)},
+		Data:       map[string][]byte{"token": []byte(hex.EncodeToString(token))},
+	}
+	if err := controllerutil.SetControllerReference(fleet, &secret, r.Scheme); err != nil {
+		return err
+	}
+	return r.Create(ctx, &secret)
 }
 
 // nodeStep is what the celld upgrade needs next.

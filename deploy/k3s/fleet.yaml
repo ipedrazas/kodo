@@ -1,0 +1,29 @@
+# The kodo fleet on the k3s cluster, managed by the operator: Tigris bucket
+# kodo-dev, gVisor, and identity from the in-cluster Dex. The Secret "bucket"
+# holds AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (task k3s:up creates it).
+apiVersion: kodo.dev/v1alpha1
+kind: Fleet
+metadata:
+  name: kodo
+  namespace: kodo
+spec:
+  celld: ghcr.io/denoland/celld:0.6.0
+  kernel: KERNEL_IMAGE
+  replicas: 3
+  runtimeClassName: gvisor
+  bucket:
+    name: kodo-dev
+    endpoint: https://t3.storage.dev
+    region: auto
+    credentialsSecret: bucket
+  auth:
+    issuer: https://auth.hiddenfield.dev
+    audience: kodo
+    # Fetched from inside the cluster, not through the gateway.
+    jwksURL: http://dex.kodo-auth.svc:5556/keys
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1Gi

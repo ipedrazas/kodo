@@ -28,7 +28,17 @@ const retryAfter = 10 * time.Second
 
 // Kernel is the part of kernelapi.Client the registry reconcilers use.
 type Kernel interface {
-	Do(ctx context.Context, namespace, service, method, path string, body any) (kernelapi.Response, error)
+	Do(ctx context.Context, t kernelapi.Target, method, path string, body any) (kernelapi.Response, error)
+}
+
+// kernelTarget is the kernel API of the named Fleet, with its admin token.
+func kernelTarget(ctx context.Context, c ctrl.Client, namespace, fleet string) (kernelapi.Target, error) {
+	var secret corev1.Secret
+	name := AdminTokenSecretName(&kodov1.Fleet{ObjectMeta: metav1.ObjectMeta{Name: fleet}})
+	if err := c.Get(ctx, ctrl.ObjectKey{Namespace: namespace, Name: name}, &secret); err != nil {
+		return kernelapi.Target{}, fmt.Errorf("admin token for fleet %s: %w", fleet, err)
+	}
+	return kernelapi.Target{Namespace: namespace, Service: fleet, AdminToken: string(secret.Data["token"])}, nil
 }
 
 // BlueprintReconciler publishes each Blueprint resource to its Fleet's
@@ -42,6 +52,7 @@ type BlueprintReconciler struct {
 // +kubebuilder:rbac:groups=kodo.dev,resources=blueprints/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services/proxy,verbs=get;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create
 
 func (r *BlueprintReconciler) Reconcile(ctx context.Context, req ctrlmgr.Request) (ctrlmgr.Result, error) {
 	var bp kodov1.Blueprint
@@ -78,8 +89,12 @@ func (r *BlueprintReconciler) publish(ctx context.Context, bp *kodov1.Blueprint)
 		return "", false, "SourceMissing", fmt.Sprintf("ConfigMap %s has no key %s", cm.Name, bp.Spec.Source.Key), nil
 	}
 
+	target, err := kernelTarget(ctx, r.Client, bp.Namespace, bp.Spec.Fleet)
+	if err != nil {
+		return "", false, "FleetUnavailable", err.Error(), nil
+	}
 	call := func(method, path string, body any) (kernelapi.Response, error) {
-		return r.Kernel.Do(ctx, bp.Namespace, bp.Spec.Fleet, method, path, body)
+		return r.Kernel.Do(ctx, target, method, path, body)
 	}
 	upload, err := call(http.MethodPost, "/bundles", []byte(source))
 	if err != nil {
@@ -110,7 +125,7 @@ func (r *BlueprintReconciler) publish(ctx context.Context, bp *kodov1.Blueprint)
 	case res.Status == http.StatusConflict:
 		// Already published: fine if it is the same bundle, e.g. after an
 		// operator restart; a conflict if the source changed.
-		existing, err := r.publishedDigest(ctx, bp)
+		existing, err := r.publishedDigest(ctx, target, bp)
 		if err != nil {
 			return uploaded.Digest, false, "FleetUnavailable", err.Error(), nil
 		}
@@ -124,8 +139,8 @@ func (r *BlueprintReconciler) publish(ctx context.Context, bp *kodov1.Blueprint)
 	}
 }
 
-func (r *BlueprintReconciler) publishedDigest(ctx context.Context, bp *kodov1.Blueprint) (string, error) {
-	res, err := r.Kernel.Do(ctx, bp.Namespace, bp.Spec.Fleet, http.MethodGet, "/blueprints/"+bp.Spec.Blueprint, nil)
+func (r *BlueprintReconciler) publishedDigest(ctx context.Context, target kernelapi.Target, bp *kodov1.Blueprint) (string, error) {
+	res, err := r.Kernel.Do(ctx, target, http.MethodGet, "/blueprints/"+bp.Spec.Blueprint, nil)
 	if err != nil {
 		return "", err
 	}
@@ -168,9 +183,12 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrlmgr.Request
 	if err := r.Get(ctx, req.NamespacedName, &ws); err != nil {
 		return ctrlmgr.Result{}, ctrl.IgnoreNotFound(err)
 	}
-	res, err := r.Kernel.Do(ctx, ws.Namespace, ws.Spec.Fleet, http.MethodPut, "/workspaces/"+ws.Name,
-		map[string]any{"quota": ws.Spec.Quota})
 	requeue := workspaceRefresh
+	res := kernelapi.Response{}
+	target, err := kernelTarget(ctx, r.Client, ws.Namespace, ws.Spec.Fleet)
+	if err == nil {
+		res, err = r.Kernel.Do(ctx, target, http.MethodPut, "/workspaces/"+ws.Name, map[string]any{"quota": ws.Spec.Quota})
+	}
 	switch {
 	case err != nil:
 		setCondition(&ws.Status.Conditions, ws.Generation, ConditionSynced, false, "FleetUnavailable", err.Error())

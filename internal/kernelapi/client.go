@@ -46,16 +46,25 @@ func (r Response) Error() string {
 // Decode unmarshals the body into v.
 func (r Response) Decode(v any) error { return json.Unmarshal(r.Body, v) }
 
-// Do calls METHOD /api/PATH on the fleet whose Service is namespace/service.
-// A body that is not []byte is sent as JSON. A transport failure, including
-// the fleet not answering, is an error; any HTTP answer is a Response.
-func (c *Client) Do(ctx context.Context, namespace, service, method, path string, body any) (Response, error) {
+// Target is a fleet's kernel API: the fleet's Service and the admin token
+// the kernel accepts from the operator.
+type Target struct {
+	Namespace  string
+	Service    string
+	AdminToken string
+}
+
+// Do calls METHOD /api/PATH on the target fleet. A body that is not []byte is
+// sent as JSON. A transport failure, including the fleet not answering, is an
+// error; any HTTP answer is a Response.
+func (c *Client) Do(ctx context.Context, t Target, method, path string, body any) (Response, error) {
 	req := c.rest.Verb(method).
-		Namespace(namespace).
+		Namespace(t.Namespace).
 		Resource("services").
-		Name(fmt.Sprintf("http:%s:http", service)).
+		Name(fmt.Sprintf("http:%s:http", t.Service)).
 		SubResource("proxy").
-		Suffix("api", strings.TrimPrefix(path, "/"))
+		Suffix("api", strings.TrimPrefix(path, "/")).
+		SetHeader("x-kodo-admin-token", t.AdminToken)
 	switch b := body.(type) {
 	case nil:
 	case []byte:
