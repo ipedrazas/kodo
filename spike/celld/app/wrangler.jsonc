@@ -1,0 +1,14 @@
+{
+  "name": "kodo-spike",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "r2_buckets": [{ "binding": "BUNDLES", "bucket_name": "bundles" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "COUNTER", "class_name": "Counter" },
+      { "name": "CELL", "class_name": "Cell" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Counter", "Cell"] }]
+}

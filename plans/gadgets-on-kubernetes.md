@@ -1,238 +1,229 @@
 # Plan: Gadgets on Kubernetes
 
 > Source PRD: [Gadgets on Kubernetes — Technical Solution Draft](./Gadgets%20on%20Kubernetes%20-%20Technical%20Solution%20Draft.md) (Sep 30, 2026)
+>
+> Revised after the [Phase 0 celld spike](../spike/celld/README.md). celld already provides cell ownership, placement, hibernation, failover and runtime code loading, so the placement registry, the lease library and the Go cell router from the first version of this plan are gone.
 
 ## Architectural decisions
 
 Durable decisions that apply across all phases:
 
-- **Languages**: Go (kubebuilder / controller-runtime) for the control plane, cell router and Gatekeeper. celld is the runtime pool, subject to the Phase 0 go/no-go.
-- **Gadget API**: our own narrow API, Workers-shaped but with no promise to run Cloudflare OS code unmodified. A gadget is a bundle exporting a fetch handler, with a per-cell SQLite database and named bindings as its only authority.
-- **CRDs**: `RuntimePool`, `Blueprint`, `Workspace` under `kodo.dev/v1alpha1`. Cells and leases never go in etcd.
-- **Placement registry**: Postgres (CloudNativePG) is the queryable index of cells, owners and pod load. The S3 `lease` object (owner pod + epoch, written with If-Match) is the only correctness fence; the registry can be rebuilt from S3.
-- **Key models**: Workspace, Blueprint (name, version, bundle digest, capabilities, tier), Cell (workspace, cell id, blueprint version, owner user, state), Lease (pod, epoch), Grant (user, cell, capability), Share (user, cell, role).
-- **Cell states**: the seven-state lifecycle from the draft; the state names are fixed in Phase 3 and reused in metrics and the registry.
-- **Bucket layout**: as in the draft, unchanged (`bundles/sha256/`, `blueprints/`, `cells/<workspace>/<cell-id>/{snapshot,ltx,lease}`, `workspaces/<workspace>/files/`, `audit/<yyyy>/<mm>/<dd>/`).
-- **Storage contract**: core S3 operations plus conditional writes only. A provider failing the conditional-write tests is unsupported.
-- **Hostnames**: `<cell-id>.g.<domain>` for cells, `app.<domain>` for the shell UI and agent chat. One wildcard certificate via cert-manager DNS-01.
-- **Identity**: OIDC at the gateway (Gateway API, Envoy Gateway as reference). The router accepts only a short-lived signed JWT identity header.
-- **Capabilities**: `<provider>:<resource>:<verb>`, declared by the Blueprint, granted per instance by the user, enforced by the Gatekeeper. Tokens never enter the isolate.
-- **Egress**: default-deny NetworkPolicy on runtime pods; egress only to Gatekeeper, inference gateway and the S3 endpoint.
-- **Tenancy**: shared cluster with per-tenant runtime pools. Cluster-per-customer is an install of the same chart, not a separate mode.
+- **Runtime**: celld. A **fleet** is a set of celld nodes sharing one bucket prefix and running one application. celld owns single-writer ownership, placement, hibernation, failover, rebalancing and memory-pressure eviction; we configure and verify these, we do not build them.
+- **Kernel**: the one application every fleet runs. It is a Worker, written in TypeScript, that routes requests, authorises them, loads gadget bundles and hands each gadget its capabilities. It replaces the Go cell router.
+- **Gadget API**: our own, not Cloudflare OS compatibility. A gadget is a bundle whose main module exports a Durable Object class. The kernel loads it by digest with the Worker Loader and runs it as a facet of its cell, with its own SQLite database, no ambient network, and only the bindings the kernel passes in.
+- **Cell**: one kernel Durable Object per gadget instance, holding the instance's Blueprint version and grants, with the gadget as its facet. Facets cannot set alarms, so the cell holds any schedule on the gadget's behalf.
+- **State**: everything durable lives in the bucket. There is no database. The per-workspace registry of cells, owners, shares and grants is itself a Durable Object (one per Workspace).
+- **Key models**: Fleet, Workspace, Blueprint (name, version, bundle digest, capabilities, tier), Cell (workspace, cell id, blueprint version, owner), Grant (user, cell, capability), Share (user, cell, role).
+- **Go services**: the operator, the Gatekeeper and a small metrics exporter. Go does not sit on the request path to a gadget.
+- **CRDs**: `Fleet`, `Blueprint`, `Workspace` under `kodo.dev/v1alpha1`. Cells never go in etcd.
+- **Gatekeeper state**: the Gatekeeper is stateless. Encrypted tokens and approvals are bucket objects under prefixes only the Gatekeeper's credentials can read, never a fleet's. Every approval state change (pending → approved → executing → done, or rejected) is a conditional write, so two replicas cannot claim the same approval. An approval that fails mid-execution is reported as failed, not retried.
+- **Secrets**: tokens are encrypted through a vault interface and only the ciphertext is stored. OpenBao's transit engine is the first backend; a cloud KMS can follow. Platform secrets (bucket credentials, OIDC client secret, DNS-01 credentials) reach the cluster through External Secrets, from OpenBao where it is available. OpenBao is supported, not required.
+- **Bucket layout**: celld owns the layout under a fleet's prefix. Ours sits beside it: `bundles/sha256/<digest>`, `blueprints/<name>/<version>.json`, `vault/<user>/`, `approvals/<user>/<id>.json`, `audit/<yyyy>/<mm>/<dd>/`.
+- **Storage contract**: whatever `celld diagnose` accepts, which includes conditional writes and ranged reads. A provider that fails it is unsupported.
+- **Hostnames**: `<cell-id>.g.<domain>` for cells, `app.<domain>` for the shell UI, the agent chat and the API. One wildcard certificate via cert-manager DNS-01; celld does not terminate TLS.
+- **API**: under `app.<domain>/api/`, served by the kernel: workspaces, blueprints, cells, grants, shares.
+- **Identity**: OIDC at the gateway (Gateway API, Envoy Gateway as reference). The kernel accepts only a short-lived signed JWT identity header and verifies it itself.
+- **Capabilities**: `<provider>:<resource>:<verb>`, declared by the Blueprint, granted per instance by the user. A grant becomes a binding in the gadget's `env` that calls back into the kernel, which calls the Gatekeeper. Tokens never enter a fleet.
+- **Isolation**: a gadget is a V8 isolate in a process shared with other gadgets of the same fleet; celld makes no claim beyond that. The kernel boundary is gVisor on the fleet's pods. Mutually distrusting tenants get a fleet each.
+- **Egress**: default-deny NetworkPolicy on fleet pods; egress only to the Gatekeeper, the inference gateway and the bucket endpoint. celld's internal listener is unauthenticated for operator actions, so it is reachable only from pods of the same fleet.
+- **Upgrades**: mixed celld versions cannot share a fleet, so a celld upgrade stops a fleet and restarts it. Kernel deployments roll without a restart.
 - **Metric labels**: workspace and blueprint only; user and cell detail lives in traces, logs and audit.
-- **Environments**: kind for local development and CI; the existing k3s cluster with gVisor for integration, performance measurement and demos. Runtime pods run under the gVisor RuntimeClass on k3s from Phase 0, so every latency figure includes its overhead.
-- **Out of scope for v1**: the container tier (one pod per instance), the wider Cloudflare API surface, multi-region active-active cells.
+- **Environments**: kind with MinIO for local development and CI; the k3s cluster with gVisor and Tigris for integration, performance and demos.
+- **Out of scope for v1**: the container tier, the wider Cloudflare API surface as a gadget-facing API, multi-region fleets.
 
 ---
 
-## Phase 0: celld spike
+## Phase 0: celld spike (done)
 
-**User stories**: Delivery phase 1; open question on celld dynamic loading.
+See [spike/celld/README.md](../spike/celld/README.md). Verdict: go. No committed write was lost; runtime loading by digest works; gadget cold activation is about 600 ms p50; one hang was seen and not explained.
+
+---
+
+## Phase 1: Spike follow-ups and storage check
+
+**User stories**: open problems from Phase 0; storage compatibility.
 
 ### What to build
 
-Run celld as a StatefulSet on the k3s cluster under gVisor, backed by Tigris. Deploy a sample gadget with a fetch handler and SQLite state. Measure cold activation, hibernation and failover, and establish whether celld can load a bundle at runtime by content hash or whether we must add that ourselves. Time-boxed to two weeks and ends in a written go/no-go on celld.
+Close what Phase 0 left open before building on it. Try to reproduce the hang with a repeatable script and find whether it is celld or our code. Measure what the spike did not: cold activation against database size, the cause of the 100 ms warm write, behaviour at the 256 Dynamic Worker limit, and WebSockets across hibernation and failover. Run `celld diagnose` and the spike's durability run against MinIO in kind as a CI job, and against AWS S3 once.
 
 ### Acceptance criteria
 
-- [ ] Sample gadget serves requests and persists SQLite state to Tigris
-- [ ] Killing the pod mid-workload loses no committed writes
-- [ ] Cold activation, hibernation and failover times recorded against snapshot size, with and without gVisor
-- [ ] Dynamic bundle loading answered: supported, or scoped as our work
-- [ ] Go/no-go on celld written up, with the fallback if no-go
+- [ ] The hang is either explained and avoided, or reproducible on demand and reported upstream with a workaround in place
+- [ ] Gadget cold activation measured at several database sizes, and the 300 ms target confirmed, revised or given a concrete path
+- [ ] Warm write latency explained
+- [ ] Behaviour with more distinct bundles than the Dynamic Worker limit is known
+- [ ] A WebSocket to a gadget survives hibernation, and its behaviour on failover is documented
+- [ ] CI brings up a fleet on kind with MinIO and runs the kill test with no lost writes
+- [ ] `celld diagnose` passes on Tigris, MinIO and AWS S3
 
 ---
 
-## Phase 1: Storage conformance suite
+## Phase 2: Kernel and one gadget end to end
 
-**User stories**: Storage contract; compatibility; open question on Tigris, MinIO and Ceph behaviour.
-
-### What to build
-
-A lease-and-epoch library over S3 conditional writes, and a conformance suite that exercises the full storage contract: acquire, renew, take over with a higher epoch, and reject a stale writer. The suite runs in CI against MinIO (in kind), Tigris and AWS S3.
-
-### Acceptance criteria
-
-- [ ] Two contenders for one lease: exactly one wins
-- [ ] A writer holding a stale epoch is rejected on every write path
-- [ ] Suite passes on Tigris, MinIO and AWS S3 in CI
-- [ ] A provider without working conditional writes fails the suite loudly
-- [ ] Provider configuration is endpoint, region, path-style flag and credentials only
-
----
-
-## Phase 2: One cell end to end
-
-**User stories**: Routing by hostname; bundle loading by digest; per-cell SQLite.
+**User stories**: routing by hostname; bundle loading by digest; per-cell SQLite; scale to zero.
 
 ### What to build
 
-The thinnest complete path: a request to `<cell-id>.g.<domain>` reaches the cell router, which resolves a statically configured placement and proxies to a single runtime pod. The pod fetches the gadget bundle from `bundles/sha256/` by digest, runs it as an isolate and streams SQLite changes to S3. No hibernation, no auth, one pod.
+The kernel as a real project in the repository, with its build, tests and deployment in the Taskfile and CI. A request to `<cell-id>.g.<domain>` reaches the kernel, which resolves the cell, loads the gadget bundle from `bundles/sha256/` and forwards the request to the gadget facet. The cell-to-bundle binding is set by hand in this phase. Idle eviction is configured so an unused cell hibernates.
 
 ### Acceptance criteria
 
 - [ ] A bundle uploaded by digest is served at its cell hostname
 - [ ] Two cells of the same bundle keep separate state
-- [ ] State survives a runtime pod restart
-- [ ] WebSocket connections proxy through the router
-- [ ] Runs on kind and on k3s under gVisor
+- [ ] The gadget sees no bindings and cannot make outbound connections
+- [ ] A gadget error or an unknown bundle produces a clear response and does not affect other cells
+- [ ] An idle cell hibernates and the next request restores its state
+- [ ] WebSocket connections reach the gadget
+- [ ] Kernel tests run in CI; deploys to kind and to k3s under gVisor from one task
 
 ---
 
-## Phase 3: Hibernate and reactivate
+## Phase 3: Blueprints, workspaces and the gadget API
 
-**User stories**: Scale to zero; cell lifecycle.
+**User stories**: versioned gadget templates; one instance per user or document; per-team quotas.
 
 ### What to build
 
-The cell lifecycle state machine. An idle cell snapshots to S3, releases its lease and is evicted from memory; the next request activates it from the snapshot plus page log before serving. With every cell hibernated, the pool can scale to zero replicas.
+The Workspace registry and the first version of the API. Publishing a Blueprint version stores its manifest (bundle digest, declared capabilities, tier) under `blueprints/`. Creating a cell from a Blueprint in a Workspace records it in that Workspace's registry and pins the Blueprint version. The gadget API is written down: what a gadget exports, what it receives, what it cannot do.
 
 ### Acceptance criteria
 
-- [ ] A cell hibernates after a configurable idle period
-- [ ] A request to a hibernated cell activates it and returns the prior state
-- [ ] Concurrent requests during activation are queued, not failed or double-activated
-- [ ] Activation p95 measured against the 300 ms target with the bundle cached
-- [ ] A hibernated cell holds no memory and no lease
+- [ ] A Blueprint version can be published and listed through the API
+- [ ] Creating two cells from one Blueprint yields two independent instances
+- [ ] A new Blueprint version does not alter existing cells; a cell can be moved to it explicitly
+- [ ] A Workspace lists its cells and enforces a cell quota
+- [ ] A cell not in any registry is not served
+- [ ] The gadget API document matches what the kernel enforces, with a sample gadget that uses all of it
 
 ---
 
-## Phase 4: Multi-pod placement and failover
+## Phase 4: Operator and CRDs
 
-**User stories**: Placement registry; leases and epochs; placement rules; drain.
+**User stories**: declarative fleets; runs on any conformant Kubernetes.
 
 ### What to build
 
-The placement service backed by Postgres. The router asks placement who owns a cell; placement grants a lease to a pod, preferring the pod already holding the workspace's cells and otherwise the least-loaded one. Lost pods' leases expire and their cells re-place on the next request. Draining a pod hibernates its cells and releases their leases first.
+The Go operator. A `Fleet` reconciles into the celld workload, its Services, its bucket credentials, its kernel deployment and the NetworkPolicy that confines the internal listener to the fleet's own pods. `Blueprint` and `Workspace` resources reconcile into the same API calls Phase 3 exposed, so cluster operators can manage them declaratively. A kernel change rolls out without restarting nodes; a celld version change follows the stop-and-restart rule.
 
 ### Acceptance criteria
 
-- [ ] Cells spread across several runtime pods and route correctly
-- [ ] Killing a pod: its cells are served from another pod with no committed writes lost
-- [ ] A partitioned former owner cannot write after the epoch advances
-- [ ] Draining a pod hibernates its cells cleanly before termination
-- [ ] The registry can be rebuilt from S3 lease objects
-- [ ] Workspace affinity is observable in placement decisions
+- [ ] Applying a Fleet produces a serving fleet with the kernel deployed
+- [ ] Changing the kernel version on a Fleet rolls it out with no failed requests
+- [ ] Changing the celld version restarts the fleet in the documented order and loses no committed writes
+- [ ] The internal listener is unreachable from outside the fleet's pods
+- [ ] Pod termination grace is long enough for celld's handoff, verified by a rolling restart under load
+- [ ] Applying Blueprint and Workspace resources has the same effect as the API calls
+- [ ] Deleting a Fleet leaves its bucket data untouched
 
 ---
 
-## Phase 5: Blueprint, RuntimePool and Workspace CRDs
-
-**User stories**: Declarative objects; versioned gadget templates; per-team quotas.
-
-### What to build
-
-The three CRDs and their controllers. A RuntimePool reconciles into a runtime workload with its image, node pool, RuntimeClass and capacity. A Blueprint version pins a bundle digest, capabilities and tier, mirrored to `blueprints/`. A Workspace carries quotas and its IdP group. A control plane API creates a cell from a Blueprint in a Workspace.
-
-### Acceptance criteria
-
-- [ ] Applying a RuntimePool produces running runtime pods
-- [ ] Applying a Blueprint makes it instantiable; a new version does not alter existing cells
-- [ ] Creating two instances of one Blueprint yields two independent cells
-- [ ] Workspace cell quota is enforced at creation
-- [ ] Placement respects the Blueprint's tier when choosing a pool
-
----
-
-## Phase 6: Identity, TLS and sharing
+## Phase 5: Identity, TLS and sharing
 
 **User stories**: OIDC at the gateway; wildcard TLS; per-user instances; shares.
 
 ### What to build
 
-Gateway API with OIDC against a customer IdP (Dex in kind), the wildcard certificate via cert-manager, and the signed identity header between gateway and router. Cells get an owner; the router authorises each request against ownership and share grants. Optional capability URLs give anonymous read-only access.
+Gateway API with OIDC against a customer IdP (Dex in kind), the wildcard certificate via cert-manager, and the signed identity header, which the kernel verifies. Cells get an owner; the kernel authorises each request against ownership and the Workspace's share grants. Optional capability URLs give anonymous read-only access.
 
 ### Acceptance criteria
 
 - [ ] Unauthenticated requests are redirected to the IdP
-- [ ] The router rejects requests with a missing, unsigned or expired identity header
+- [ ] The kernel rejects a missing, unsigned or expired identity header
 - [ ] Two users each run their own instance of one gadget and cannot open each other's
 - [ ] Sharing a cell with a role grants the second user access; revoking removes it
+- [ ] The gadget receives the caller's identity but no credential
 - [ ] Wildcard certificate issues and renews on the k3s cluster
 - [ ] Each cell is served from its own origin
 
 ---
 
-## Phase 7: Autoscaling and memory pressure
+## Phase 6: Autoscaling and observability
 
-**User stories**: Density; KEDA scaling; metrics.
+**User stories**: density; scaling on cells, not CPU; metrics and traces.
 
 ### What to build
 
-Per-pod caps on resident cells by memory, with least-recently-used hibernation under pressure. KEDA scales each pool on resident cells and activation queue depth. Prometheus metrics and OpenTelemetry traces for router, runtime and control plane.
+A small exporter that turns celld's node leases and `/state` into Prometheus metrics, and KEDA scaling of each Fleet on resident cells and activations waiting for capacity. Resident-cell and memory limits are set per Fleet from the pod's resources. Kernel and Go services emit OpenTelemetry traces. A load test establishes cells per pod and per cluster.
 
 ### Acceptance criteria
 
-- [ ] A pod at its memory cap hibernates its least-recently-used cell instead of failing activation
-- [ ] The pool scales out under activation load and back in when idle, to zero if configured
-- [ ] Metrics cover active cells, activations/s, activation p95, hibernations, S3 ops and errors, lease conflicts
+- [ ] A fleet scales out when activations queue and back in when nodes have headroom, with no failed requests during either
+- [ ] A node at its limit hibernates idle cells rather than failing activations
+- [ ] Metrics cover active cells, activations/s, activation p95, hibernations, bucket errors and fleet health
 - [ ] Metric labels are limited to workspace and blueprint
-- [ ] A load test on k3s reports cells per pod and cells per cluster
+- [ ] A trace follows a request from the gateway through the kernel to the gadget
+- [ ] The load test reports cells per pod and per cluster on k3s, against the draft's goal of thousands per cluster
+- [ ] Scale to zero nodes and back is either supported or explicitly ruled out with the reason
 
 ---
 
-## Phase 8: Gatekeeper read path
+## Phase 7: Gatekeeper read path
 
-**User stories**: Capabilities, not credentials; token vault; default-deny network; audit.
+**User stories**: capabilities, not credentials; token vault; default-deny network; audit.
 
 ### What to build
 
-The Gatekeeper service with an encrypted per-user token vault and per-request scope enforcement. A Blueprint declares capabilities, the user grants a subset per instance, and the runtime injects one binding per grant that calls the Gatekeeper. GitHub read is the first provider. Default-deny NetworkPolicy goes onto runtime pods, and every request and decision is appended to `audit/`.
+The Gatekeeper as a stateless Go service outside every fleet, with per-request scope enforcement and a per-user token vault: tokens encrypted with OpenBao transit and stored as ciphertext under `vault/`. The Gatekeeper authenticates to OpenBao with its Kubernetes identity. A Blueprint declares capabilities, the user grants a subset per instance, and the kernel gives the gadget one binding per grant. A call on that binding goes to the kernel, which asserts the cell and grant to the Gatekeeper. GitHub read is the first provider. Default-deny egress goes onto fleet pods, and every request and decision is appended to `audit/`.
 
 ### Acceptance criteria
 
 - [ ] A gadget with a granted `github:repo/<org>/<repo>:read` reads that repo
 - [ ] The same gadget is denied a repo or verb outside its grant
 - [ ] A gadget without the grant has no binding at all
-- [ ] Direct outbound connections from a gadget fail
-- [ ] OAuth tokens are encrypted at rest and never visible to gadget code
+- [ ] The Gatekeeper rejects a call that does not come from a fleet it trusts
+- [ ] Direct outbound connections from a fleet pod fail, except to the Gatekeeper, inference gateway and bucket
+- [ ] OAuth tokens are stored only as ciphertext, the Gatekeeper holds no encryption key, and no token reaches a fleet
+- [ ] A fleet's bucket credentials cannot read `vault/` or `approvals/`
+- [ ] The vault backend is an interface with OpenBao transit as its one implementation
 - [ ] Each call is in the audit log with user, gadget, cell, grant and decision
 
 ---
 
-## Phase 9: Approval queue
+## Phase 8: Approval queue
 
-**User stories**: Side-effecting calls wait for a human.
+**User stories**: side-effecting calls wait for a human.
 
 ### What to build
 
-Gatekeeper classifies calls by verb. Writes, sends and deletes are parked in an approval queue; the user sees the pending action in the shell UI, approves or rejects it, and only then does the call run. An email provider is the first side-effecting integration.
+The Gatekeeper classifies calls by verb. Writes, sends and deletes are parked as objects under `approvals/`, each state change a conditional write; the user sees the pending action in the shell UI, approves or rejects it, and only then does the call run. An email provider is the first side-effecting integration.
 
 ### Acceptance criteria
 
 - [ ] A gadget drafts an email and the send waits in the queue
-- [ ] Approving runs the call exactly once; rejecting never runs it
+- [ ] Approving runs the call at most once, even with two Gatekeeper replicas racing; rejecting never runs it
+- [ ] A Gatekeeper killed mid-execution leaves the approval reported as failed, not silently retried or lost
 - [ ] The gadget observes the pending, approved and rejected outcomes
 - [ ] Pending approvals survive a Gatekeeper restart and cell hibernation
 - [ ] Audit records who approved what, and when
 
 ---
 
-## Phase 10: Inference gateway
+## Phase 9: Inference gateway
 
-**User stories**: Model routing; cost per user and team; budgets.
+**User stories**: model routing; cost per user and team; budgets.
 
 ### What to build
 
-Deploy the inference gateway (LiteLLM or Envoy AI Gateway, chosen in this phase) with a virtual key per user and team. Gadgets reach models through an inference binding; keys stay outside the isolate. Budgets and rate limits are enforced at the gateway and usage is attributed per user and workspace.
+Deploy the inference gateway (LiteLLM or Envoy AI Gateway, chosen in this phase) with a virtual key per user and team. Gadgets reach models through an inference binding; keys stay outside the fleet. Budgets and rate limits are enforced at the gateway and usage is attributed per user and workspace.
 
 ### Acceptance criteria
 
-- [ ] A gadget calls a model through its binding with no provider key in the isolate
+- [ ] A gadget calls a model through its binding with no provider key in the fleet
 - [ ] A user over budget is refused at the gateway
 - [ ] Token usage is reported per user and team
 - [ ] Routing to at least two backends is configurable without gadget changes
-- [ ] Cell-seconds and storage per workspace are reported alongside tokens
+- [ ] Storage and activity per workspace are reported alongside tokens
 
 ---
 
-## Phase 11: Agent code execution
+## Phase 10: Agent code execution
 
-**User stories**: Agent as a tenant; ephemeral cells.
+**User stories**: agent as a tenant; ephemeral cells.
 
 ### What to build
 
-The agent service and the chat surface at `app.<domain>`, with session state in the workspace cell. The agent plans, writes a snippet, and asks the control plane for an ephemeral cell that runs it with the user's grants and is destroyed afterwards. Workspace markdown (skills, knowledge) is loaded into context on demand.
+The agent service and the chat surface at `app.<domain>`, with session state in the workspace. The agent plans, writes a snippet, and asks the kernel to run it as an ephemeral gadget with the user's grants, destroyed afterwards. Workspace markdown (skills, knowledge) is loaded into context on demand.
 
 ### Acceptance criteria
 
@@ -240,17 +231,18 @@ The agent service and the chat surface at `app.<domain>`, with session state in 
 - [ ] The ephemeral cell has exactly the user's grants, never more
 - [ ] A side-effecting call from agent code goes through the approval queue
 - [ ] The ephemeral cell and its state are gone after the run
+- [ ] Runaway agent code is stopped by CPU and request limits without affecting other cells
 - [ ] Chat history survives an agent service restart
 
 ---
 
-## Phase 12: Agent gadget authoring
+## Phase 11: Agent gadget authoring
 
-**User stories**: Agent writes gadgets; publishing is a user action.
+**User stories**: agent writes gadgets; publishing is a user action.
 
 ### What to build
 
-The agent produces a gadget bundle; the control plane stores it by digest and creates a draft Blueprint version with its declared capabilities. The user reviews the requested capabilities, publishes, and opens an instance.
+The agent produces a gadget bundle; the kernel stores it by digest and creates a draft Blueprint version with its declared capabilities. The user reviews the requested capabilities, publishes, and opens an instance.
 
 ### Acceptance criteria
 
@@ -262,37 +254,37 @@ The agent produces a gadget bundle; the control plane stores it by digest and cr
 
 ---
 
-## Phase 13: Isolation hardening
+## Phase 12: Tenancy and hardening
 
-**User stories**: Layered isolation; per-tenant pools; HA control plane.
+**User stories**: layered isolation; per-tenant fleets; high availability.
 
 ### What to build
 
-Restricted Pod Security, no ServiceAccount token and read-only root on runtime pods; gVisor required rather than merely used. Runtime pools per customer or trust tier, on separate node pools and optionally namespaces. Control plane, router, Gatekeeper and Postgres run with replicas and leader election.
+A fleet per tenant or trust tier, each with its own bucket prefix, credentials and node pool. Fleet pods run with restricted Pod Security, no ServiceAccount token, a read-only root filesystem and a mandatory sandboxed RuntimeClass. The operator, Gatekeeper and exporter run with replicas and leader election. Bucket access uses workload identity where the platform has it.
 
 ### Acceptance criteria
 
-- [ ] Runtime pods pass restricted Pod Security admission and refuse to start without the sandboxed RuntimeClass
-- [ ] A cell from one tenant is never placed on another tenant's pool
-- [ ] Losing any one control plane, router or Gatekeeper replica causes no failed requests beyond in-flight ones
-- [ ] Postgres failover does not lose placement correctness (leases still fence)
+- [ ] A fleet pod refuses to start without the sandboxed RuntimeClass and passes restricted Pod Security admission
+- [ ] A cell of one tenant cannot be served by another tenant's fleet, and one fleet's credentials cannot read another's prefix
+- [ ] Losing any one operator or Gatekeeper replica causes no failed requests beyond in-flight ones
+- [ ] Losing a whole node, and two fleet nodes at once, loses no committed writes
 - [ ] Workload identity is used for bucket access where available, External Secrets otherwise
 - [ ] Audit objects use Object Lock where the provider supports it
 
 ---
 
-## Phase 14: Helm chart and install
+## Phase 13: Helm chart and install
 
-**User stories**: Runs on any conformant Kubernetes; installable in one afternoon.
+**User stories**: runs on any conformant Kubernetes; installable in one afternoon.
 
 ### What to build
 
-A single Helm chart for the whole platform with documented prerequisites (Gateway API, cert-manager, KEDA, CloudNativePG, an S3 bucket, an IdP), a preflight check that runs the storage conformance tests against the customer's bucket, and an install guide.
+A single Helm chart for the whole platform with documented prerequisites (Gateway API, cert-manager, KEDA, External Secrets, a bucket, an IdP, and OpenBao or another supported vault backend), a preflight check that runs `celld diagnose` against the customer's bucket, and an install guide.
 
 ### Acceptance criteria
 
 - [ ] Clean install on a fresh k3s cluster and on one managed cluster (EKS, GKE or AKS)
-- [ ] Preflight fails clearly on a bucket without conditional writes
+- [ ] Preflight fails clearly on a bucket that does not meet the storage contract
 - [ ] Someone outside the team completes the install from the guide in one afternoon
-- [ ] Upgrade from the previous chart version keeps existing cells intact
+- [ ] Upgrade from the previous chart version keeps existing cells intact, including a celld version change
 - [ ] Uninstall leaves the bucket untouched
