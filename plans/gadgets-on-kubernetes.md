@@ -43,7 +43,7 @@ See [spike/celld/README.md](../spike/celld/README.md). Verdict: go. No committed
 
 ## Phase 1: Spike follow-ups and storage check (done)
 
-See [spike/celld/PHASE1.md](../spike/celld/PHASE1.md). Durability held throughout; density did not. celld 0.6.0 has four problems, drafted as a report to its maintainers: facet calls that hang after a burst, loaded bundles that are never released (about 100 distinct bundles per 1 GiB node before the fleet refuses everything), no WebSockets inside facets, and a panic on surviving nodes after an owner is killed. Cold gadget activation is about 0.8 s plus 0.1 s per MiB, so the 300 ms target is replaced by cold p50 under 1 s for gadgets under 1 MiB. Warm write latency is the node disks. CI runs a fleet on kind with SeaweedFS. Still open: `celld diagnose` against AWS S3.
+See [spike/celld/PHASE1.md](../spike/celld/PHASE1.md). Durability held throughout; density did not. celld 0.6.0 has four problems, drafted as a report to its maintainers: facet calls that hang after a burst, loaded bundles that are never released (about 100 distinct bundles per 1 GiB node before the fleet refuses everything), no WebSockets inside facets, and a panic on surviving nodes after an owner is killed. Cold gadget activation is about 0.8 s plus 0.1 s per MiB, so the 300 ms target is replaced by cold p50 under 1 s for gadgets under 1 MiB. Warm write latency is the node disks. CI runs a fleet on kind with SeaweedFS. AWS S3 was dropped from this phase; Tigris, SeaweedFS and RustFS are the tested providers.
 
 ---
 
