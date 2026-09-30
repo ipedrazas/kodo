@@ -121,9 +121,11 @@ cell=$(api POST /workspaces/e2e/cells '{"blueprint":"fixture"}' | head -1 | sed 
 echo "cell $cell serves the fixture gadget"
 
 step "3. Internal listener"
-if "${k[@]}" exec client -- curl -s -m 5 -o /dev/null "http://kodo-0.kodo-peers:8081/state"; then
-  fail "another pod reached the internal listener"
-fi
+# A dropped connection times out (curl exit 28); a refusal or a DNS failure
+# would mean the check tested nothing.
+code=0
+"${k[@]}" exec client -- curl -s -m 5 -o /dev/null "http://kodo-0.kodo-peers:8081/state" || code=$?
+[[ $code == 28 ]] || fail "internal listener check: curl exit $code, want 28 (timed out)"
 echo "closed to other pods; public listener still serves: $(cell_get "$cell")"
 
 step "4. Kernel rollout under load"
