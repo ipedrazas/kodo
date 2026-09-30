@@ -54,6 +54,7 @@ tasks:
     desc: Everything CI runs
     cmds:
       - task: tidy
+      - task: operator:generate:check
       - task: lint
       - task: test
       - task: build
@@ -201,3 +202,19 @@ tasks:
     desc: Call the kernel API on TARGET from inside the cluster (METHOD=GET ROUTE=/blueprints BODY='json' or BODY=@file)
     cmds:
       - deploy/fleet/api.sh {{.CONTEXT}} {{.METHOD | default "GET"}} {{.ROUTE}} {{if .BODY}}{{shellQuote .BODY}}{{end}}
+
+  operator:generate:
+    desc: Regenerate deepcopy code, CRDs and the operator ClusterRole
+    cmds:
+      - go tool controller-gen object crd rbac:roleName=kodo-operator paths=./... output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
+
+  operator:generate:check:
+    desc: Fail if generated operator files are out of date
+    cmds:
+      - task: operator:generate
+      - git diff --exit-code -- api config
+
+  operator:e2e:kind:
+    desc: Run the operator end-to-end test on a kind cluster (needs Docker, kind and Go)
+    cmds:
+      - test/e2e/kind.sh

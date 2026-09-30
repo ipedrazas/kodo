@@ -36,6 +36,7 @@ jobs:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - run: task tidy
+      - run: task operator:generate:check
       - run: task test
       - run: task build
 
@@ -93,3 +94,31 @@ jobs:
           for p in celld-0 celld-1 celld-2; do
             kubectl --context kind-kodo -n kodo logs "$p" --tail=200 || true
           done
+
+  # The operator end to end on kind: Fleet, Blueprint and Workspace, a kernel
+  # rollout under load, a celld image change, and deleting the Fleet.
+  operator-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: helm/kind-action@v1
+        with:
+          install_only: true
+      - run: task operator:e2e:kind
+      - name: Collect diagnostics
+        if: failure()
+        run: |
+          kubectl --context kind-kodo -n kodo-e2e get fleet,blueprint,workspace,sts,pods,jobs -o wide || true
+          kubectl --context kind-kodo -n kodo-e2e get fleet kodo -o yaml || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: operator-e2e
+          path: test/e2e/results/

@@ -1,0 +1,22 @@
+# The notes sample gadget as Blueprint notes 1.0.0, and a workspace. Create
+# the ConfigMap with:
+#   kubectl create configmap notes --from-file=notes.js=kernel/examples/notes.js
+apiVersion: kodo.dev/v1alpha1
+kind: Blueprint
+metadata:
+  name: notes-1.0.0
+spec:
+  fleet: kodo
+  blueprint: notes
+  version: 1.0.0
+  source:
+    name: notes
+    key: notes.js
+---
+apiVersion: kodo.dev/v1alpha1
+kind: Workspace
+metadata:
+  name: team
+spec:
+  fleet: kodo
+  quota: 50
