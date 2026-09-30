@@ -18,7 +18,7 @@ set -a
 set +a
 hash() { htpasswd -nbBC 10 x "$1" | cut -d: -f2 | sed 's/^\$2y\$/$2a$/'; }
 
-kubectl create namespace kodo-auth --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace kodo-auth --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n kodo-auth create secret generic dex-secrets \
   --from-literal=DEX_CLIENT_SECRET="$DEX_CLIENT_SECRET" \
   --from-literal=ALICE_PASSWORD_HASH="$(hash "$ALICE_PASSWORD")" \

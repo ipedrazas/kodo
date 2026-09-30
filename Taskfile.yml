@@ -231,3 +231,30 @@ tasks:
       RUNTIME_CLASS: gvisor
     cmds:
       - test/e2e/cluster.sh
+
+  k3s:up:
+    desc: The hiddenfield.dev environment on the k3s cluster (KERNEL_IMAGE and OPERATOR_IMAGE required)
+    cmds:
+      - kubectl --context {{.K3S_CONTEXT}} apply --server-side -k deploy/platform
+      - kubectl --context {{.K3S_CONTEXT}} -n cert-manager rollout status deploy/cert-manager-webhook --timeout=300s
+      - kubectl --context {{.K3S_CONTEXT}} -n envoy-gateway-system rollout status deploy/envoy-gateway --timeout=300s
+      - >-
+        kubectl --context {{.K3S_CONTEXT}} -n cert-manager create secret generic cloudflare-api-token
+        --from-literal=token="$CLOUDFLARE_API_TOKEN" --dry-run=client -o yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - sed "s/LETSENCRYPT_EMAIL/$LETSENCRYPT_EMAIL/" deploy/k3s/gateway.yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - deploy/k3s/auth-secrets.sh
+      - kubectl --context {{.K3S_CONTEXT}} apply -f deploy/k3s/dex.yaml
+      - kubectl --context {{.K3S_CONTEXT}} apply -k config
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo-system set image deploy/kodo-operator operator={{.OPERATOR_IMAGE}}
+      - >-
+        kubectl --context {{.K3S_CONTEXT}} -n kodo create secret generic bucket
+        --from-literal=AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" --from-literal=AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
+        --dry-run=client -o yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - sed "s#KERNEL_IMAGE#{{.KERNEL_IMAGE}}#" deploy/k3s/fleet.yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - kubectl --context {{.K3S_CONTEXT}} apply -f deploy/k3s/routes.yaml
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo wait fleet/kodo --for=condition=Ready --timeout=600s
+
+  k3s:identity-test:
+    desc: Log in through the hiddenfield.dev gateway as the test users and check identity, TLS and sharing
+    cmds:
+      - test/e2e/identity.sh

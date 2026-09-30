@@ -13,7 +13,7 @@ trap 'rm -rf "$work"' EXIT
 cp -R "$src/wrangler.jsonc" "$src/src" "$work/"
 
 # JSON string escaping for values that should never need it, but might.
-quote() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | sed -e 's/^/"/' -e 's/$/"/'; }
+quote() { printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"; }
 hash=""
 if [ -n "${KERNEL_ADMIN_TOKEN:-}" ]; then
   if command -v sha256sum >/dev/null; then
