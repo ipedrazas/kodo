@@ -1,8 +1,12 @@
 version: "3"
 
+dotenv: [".env"]
+
 vars:
   MODULE: github.com/ipedrazas/kodo
   KIND_CLUSTER: kodo
+  SPIKE_BUCKET: kodo-celld-spike
+  SPIKE_NS: kodo-spike
   VERSION:
     sh: git describe --tags --always --dirty 2>/dev/null || echo dev
   COMMIT:
@@ -62,3 +66,31 @@ tasks:
     desc: Delete the local kind cluster
     cmds:
       - kind delete cluster --name {{.KIND_CLUSTER}}
+
+  spike:deploy:
+    desc: Deploy the spike app and sample gadget bundle to the spike bucket (needs celld and esbuild)
+    dir: spike/celld
+    vars:
+      DIGEST:
+        sh: shasum -a 256 gadgets/notes.js | cut -d' ' -f1
+    cmds:
+      - S3_ENDPOINT=$AWS_ENDPOINT_URL_S3 celld deploy app --bucket s3://{{.SPIKE_BUCKET}} --region auto
+      - >-
+        S3_ENDPOINT=$AWS_ENDPOINT_URL_S3 celld r2 put bundles sha256/{{.DIGEST}}.js --path gadgets/notes.js
+        --content-type text/javascript --bucket s3://{{.SPIKE_BUCKET}} --region auto
+      - echo "bundle digest {{.DIGEST}}"
+
+  spike:up:
+    desc: Run the celld spike fleet on the current kubectl context
+    cmds:
+      - kubectl create namespace {{.SPIKE_NS}} --dry-run=client -o yaml | kubectl apply -f -
+      - >-
+        kubectl -n {{.SPIKE_NS}} create secret generic celld-bucket --from-env-file=.env
+        --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl apply -f spike/celld/k8s/celld.yaml
+      - kubectl -n {{.SPIKE_NS}} rollout status sts/celld --timeout=300s
+
+  spike:down:
+    desc: Delete the celld spike namespace (the bucket is left untouched)
+    cmds:
+      - kubectl delete namespace {{.SPIKE_NS}}
