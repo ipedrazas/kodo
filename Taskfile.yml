@@ -1,0 +1,64 @@
+version: "3"
+
+vars:
+  MODULE: github.com/ipedrazas/kodo
+  KIND_CLUSTER: kodo
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  COMMIT:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo none
+  LDFLAGS: >-
+    -X {{.MODULE}}/internal/version.version={{.VERSION}}
+    -X {{.MODULE}}/internal/version.commit={{.COMMIT}}
+
+tasks:
+  default:
+    desc: List available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  fmt:
+    desc: Format Go code
+    cmds:
+      - golangci-lint fmt
+
+  lint:
+    desc: Run linters
+    cmds:
+      - golangci-lint run
+
+  test:
+    desc: Run unit tests with the race detector
+    cmds:
+      - go test -race -coverprofile=coverage.out ./...
+
+  build:
+    desc: Build all packages
+    cmds:
+      - go build -ldflags "{{.LDFLAGS}}" ./...
+
+  tidy:
+    desc: Tidy go.mod and fail if it changes
+    cmds:
+      - go mod tidy -diff
+
+  ci:
+    desc: Everything CI runs
+    cmds:
+      - task: tidy
+      - task: lint
+      - task: test
+      - task: build
+
+  kind:up:
+    desc: Create the local kind cluster
+    status:
+      - kind get clusters | grep -qx {{.KIND_CLUSTER}}
+    cmds:
+      - kind create cluster --name {{.KIND_CLUSTER}}
+
+  kind:down:
+    desc: Delete the local kind cluster
+    cmds:
+      - kind delete cluster --name {{.KIND_CLUSTER}}
