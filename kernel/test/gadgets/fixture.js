@@ -7,6 +7,7 @@ import { DurableObject } from "cloudflare:workers";
 //   ?spin    busy-loops for 20 s of CPU
 //   ?probe   reports its bindings and whether outbound fetch works
 //   ?forge=C asks the host to set an alarm for cell C with made-up props
+//   ?whoami  reports the request headers the gadget received
 // WebSocket messages are echoed with a count of messages seen.
 export class App extends DurableObject {
   async fetch(request) {
@@ -16,6 +17,9 @@ export class App extends DurableObject {
     if (url.searchParams.has("spin")) {
       const end = Date.now() + 20_000;
       while (Date.now() < end);
+    }
+    if (url.searchParams.has("whoami")) {
+      return Response.json(Object.fromEntries(request.headers));
     }
     if (url.searchParams.has("forge")) {
       const props = { cell: url.searchParams.get("forge"), token: btoa("not a real token") };
@@ -41,9 +45,9 @@ export class App extends DurableObject {
     return Response.json({ n, cell: request.headers.get("x-kodo-cell") });
   }
 
-  onMessage(socket, message) {
+  onMessage(socket, message, caller) {
     const n = (this.ctx.storage.kv.get("messages") ?? 0) + 1;
     this.ctx.storage.kv.put("messages", n);
-    return JSON.stringify({ n, echo: String(message) });
+    return JSON.stringify({ n, echo: String(message), role: caller.role });
   }
 }

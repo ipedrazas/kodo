@@ -61,17 +61,19 @@ wait_ready() {
     { "${k[@]}" get fleet kodo -o yaml; "${k[@]}" get pods; fail "fleet not ready"; }
 }
 
+token() { "${k[@]}" get secret kodo-admin-token -o jsonpath='{.data.token}' | base64 -d; }
+
 api() { # api METHOD PATH [JSON]
-  local args=(-s -m 30 -X "$1" -H 'Host: api.kodo' -w '\n%{http_code}')
+  local args=(-s -m 30 -X "$1" -H 'Host: api.kodo' -H "x-kodo-admin-token: $(token)" -w '\n%{http_code}')
   [[ -n ${3:-} ]] && args+=(-H 'content-type: application/json' -d "$3")
   "${k[@]}" exec client -- curl "${args[@]}" "http://kodo/api$2"
 }
 
-cell_get() { "${k[@]}" exec client -- curl -s -m 30 -H "Host: $1.g.kodo" http://kodo/; }
+cell_get() { "${k[@]}" exec client -- curl -s -m 30 -H "Host: $1.g.kodo" -H "x-kodo-admin-token: $(token)" http://kodo/; }
 
 start_writer() { # start_writer CELL LOG
   "${k[@]}" exec client -- rm -f "/tmp/stop-$1"
-  "${k[@]}" exec client -- sh /tmp/writer.sh kodo "$1" > "$2" &
+  "${k[@]}" exec client -- sh /tmp/writer.sh kodo "$1" "$(token)" > "$2" &
   writer_pid=$!
 }
 
@@ -117,7 +119,8 @@ YAML
 "${k[@]}" wait workspace/e2e --for=condition=Synced --timeout=120s >/dev/null
 api GET /blueprints/fixture | head -1 | grep -q '"version":"1"' || fail "blueprint not in the catalog"
 api GET /workspaces/e2e | head -1 | grep -q '"quota":7' || fail "workspace quota not applied"
-cell=$(api POST /workspaces/e2e/cells '{"blueprint":"fixture"}' | head -1 | sed -E 's/.*"id":"([a-z0-9]+)".*/\1/')
+cell=$(api POST /workspaces/e2e/cells '{"blueprint":"fixture","owner":{"user":"e2e","email":"e2e@kodo.test"}}' |
+  head -1 | sed -E 's/.*"id":"([a-z0-9]+)".*/\1/')
 [[ $(cell_get "$cell") == *'"n":1'* ]] || fail "cell $cell did not serve"
 echo "cell $cell serves the fixture gadget"
 

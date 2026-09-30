@@ -53,6 +53,27 @@ spec:
           spec:
             description: FleetSpec describes a celld fleet running the kodo kernel.
             properties:
+              auth:
+                description: |-
+                  Auth is the OIDC provider whose ID tokens the kernel accepts. Without
+                  it only the operator's admin token is accepted.
+                properties:
+                  audience:
+                    description: Audience is the OIDC client id the gateway logs users
+                      in with.
+                    type: string
+                  issuer:
+                    description: Issuer is the OIDC issuer URL, e.g. https://auth.example.com.
+                    type: string
+                  jwksURL:
+                    description: |-
+                      JWKSURL is where the kernel fetches the issuer's signing keys; it may
+                      be an in-cluster URL. Defaults to <issuer>/keys.
+                    type: string
+                required:
+                - audience
+                - issuer
+                type: object
               bucket:
                 description: BucketSpec locates the fleet's bucket and its credentials.
                 properties:

@@ -38,7 +38,14 @@ spec:
     credentialsSecret: bucket             # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
   resources: {}                           # per node
   storageSize: 2Gi                        # per node, a cache of the bucket
+  auth:                                   # optional; without it only the admin token works
+    issuer: https://auth.example.com
+    audience: kodo                        # the OIDC client id the gateway uses
+    jwksURL: http://dex.auth.svc:5556/keys  # optional; defaults to <issuer>/keys
 ```
+
+- **Admin token**: the operator creates `<fleet>-admin-token` (key `token`) once and deploys the kernel with its hash. It calls the kernel API with it, and so can anyone who can read the Secret.
+- **Identity settings** go to the kernel at deploy time, so changing `auth` runs a new deploy Job.
 
 - **Kernel changes** start a new deploy Job for the new image. Nodes adopt the new kernel in place within one pointer poll (30 s), with no restart and no failed requests. `status.kernel` shows the last image that deployed successfully.
 - **celld changes** stop the fleet: mixed celld versions cannot share a fleet, so the operator scales the StatefulSet to zero on the old image, waits until every node pod is gone, then starts the new image. The fleet serves nothing in between: about 20 s on kind and 36 s on the k3s cluster under gVisor. The `Upgrading` condition is true until every node runs the new image.

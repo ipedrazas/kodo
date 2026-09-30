@@ -1,6 +1,8 @@
-// The router sets this header to the cell id taken from the hostname; any
-// value a client sends is overwritten.
+// Headers the router sets after checking the request: the cell id from the
+// hostname, and the verified caller as JSON. The router drops every x-kodo-*
+// header a client sends.
 export const CELL_HEADER = "x-kodo-cell";
+export const CALLER_HEADER = "x-kodo-caller";
 
 export function text(status: number, message: string): Response {
   return new Response(`${message}\n`, {

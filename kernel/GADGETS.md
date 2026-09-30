@@ -22,17 +22,20 @@ A class that extends `DurableObject` from `cloudflare:workers` also runs, but ca
 
 | Surface | What it is |
 | --- | --- |
-| `fetch(request)` | Every HTTP request to the cell's hostname, `<cell-id>.g.<domain>`. Required. |
+| `fetch(request)` | Every HTTP request to the cell's hostname, `<cell-id>.g.<domain>`, from a caller the kernel has already authenticated and authorised. Required. |
+| Caller headers | `x-kodo-user` (the identity provider's subject), `x-kodo-email`, and `x-kodo-role`: `owner`, `editor` or `viewer`. The kernel sets them; a client cannot. |
 | `this.ctx.storage` | The gadget's own SQLite database: `storage.sql` and the synchronous `storage.kv`. It survives restarts, hibernation, moves between nodes and moves to a new Blueprint version. |
 | `this.cellId` | The id of the cell this instance runs in. |
 | `this.setAlarm(when)` | Asks the cell to call `onAlarm()` at `when`, a `Date` or epoch milliseconds. Replaces any earlier alarm. |
 | `this.deleteAlarm()` | Cancels the alarm. |
 | `onAlarm()` | Optional. Called when the alarm fires. |
-| `onMessage(socket, message)` | Optional. A message on a WebSocket to the cell. A string or `ArrayBuffer` return value is sent back on the same socket. `socket` is an opaque id. |
+| `onMessage(socket, message, caller)` | Optional. A message on a WebSocket to the cell. A string or `ArrayBuffer` return value is sent back on the same socket. `socket` is an opaque id; `caller` is `{user, email, role}` of whoever opened it. |
 | `onClose(socket, code, reason)` | Optional. A WebSocket to the cell closed. |
 
 ## What the gadget cannot do
 
+- **See credentials.** The login session cookies and the ID token are removed before a request reaches the gadget; cookies the gadget sets for its own origin are passed through.
+- **Serve writes to other origins.** The kernel refuses a write, and any WebSocket, whose `Origin` is not the cell's own; reads from other origins are allowed and the gadget decides on CORS.
 - **Reach the network.** `fetch()` and `connect()` to anything outside throw. External services arrive in Phase 7 as capabilities granted per instance.
 - **See other bindings.** `this.env` holds only `KODO`, which `Gadget` uses to talk to its cell; every call on it is checked against the cell's signed identity, so a gadget can act only for its own cell.
 - **Hold a WebSocket itself** or **set a native alarm.** celld 0.6.0 supports neither inside a gadget, so the cell holds both and passes the events on.
@@ -43,6 +46,9 @@ A class that extends `DurableObject` from `cloudflare:workers` also runs, but ca
 
 | What happens | What the caller sees |
 | --- | --- |
+| No identity, or an invalid or expired one | HTTP 401 (behind the gateway, a login redirect) |
+| The cell is not the caller's and not shared with them | HTTP 403 |
+| A viewer writes or opens a WebSocket | HTTP 403 |
 | The gadget throws, fails to load, or has no `App` | HTTP 502 `gadget failed: ...` |
 | A call takes longer than the time limit | HTTP 504 |
 | `onMessage` throws or is missing | The socket closes with code 4011 |

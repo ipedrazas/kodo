@@ -1,11 +1,15 @@
 import { KERNEL_BUILD } from "./build";
 import type { Env } from "./env";
 import { sha256Hex } from "./http";
+import type { Caller } from "./identity";
+import type { CellRecord, ShareRole } from "./workspace";
 import { isCapability, isDigest, isName, isVersion } from "./names";
 
 // The kernel API, served under /api/ on any host that is not a cell host.
-// Phase 5 puts identity in front of it; until then it has no authentication
-// and must only be reachable from inside the cluster.
+// Every call carries a verified caller: a user, or the operator's admin
+// token. Publishing and workspace settings need the admin token; any user may
+// create cells, and sees and manages only their own and those shared with
+// them.
 //
 //   GET    /api/version                               {build}
 //   POST   /api/bundles                               body: gadget source
@@ -19,6 +23,9 @@ import { isCapability, isDigest, isName, isVersion } from "./names";
 //   GET    /api/workspaces/:ws/cells/:id
 //   PATCH  /api/workspaces/:ws/cells/:id              {version}
 //   DELETE /api/workspaces/:ws/cells/:id
+//   GET    /api/workspaces/:ws/cells/:id/shares
+//   PUT    /api/workspaces/:ws/cells/:id/shares/:email {role: viewer|editor}
+//   DELETE /api/workspaces/:ws/cells/:id/shares/:email
 
 const MAX_BUNDLE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_QUOTA = 100;
@@ -35,22 +42,29 @@ class ApiError extends Error {
 const json = (status: number, body: unknown) => Response.json(body, { status });
 const catalog = (env: Env) => env.CATALOG.getByName("catalog");
 
-export async function api(request: Request, env: Env, path: string[]): Promise<Response> {
+export async function api(request: Request, env: Env, path: string[], caller: Caller): Promise<Response> {
   try {
-    return await route(request, env, path);
+    return await route(request, env, path, caller);
   } catch (err) {
     if (err instanceof ApiError) return json(err.status, { error: err.message });
     throw err;
   }
 }
 
-async function route(request: Request, env: Env, path: string[]): Promise<Response> {
+async function route(request: Request, env: Env, path: string[], caller: Caller): Promise<Response> {
   const method = request.method;
-  const [collection, a, b, c, d, ...rest] = path;
+  const [collection, a, b, c, d, e, ...rest] = path;
   if (rest.length) throw new ApiError(404, "not found");
+  const admin = () => {
+    if (caller.kind !== "admin") throw new ApiError(403, "needs the admin token");
+  };
 
   if (collection === "version" && a === undefined && method === "GET") return json(200, { build: KERNEL_BUILD });
-  if (collection === "bundles" && a === undefined && method === "POST") return uploadBundle(request, env);
+  if (collection === "whoami" && a === undefined && method === "GET") return json(200, caller);
+  if (collection === "bundles" && a === undefined && method === "POST") {
+    admin();
+    return uploadBundle(request, env);
+  }
 
   if (collection === "blueprints") {
     if (a === undefined && method === "GET") {
@@ -63,13 +77,17 @@ async function route(request: Request, env: Env, path: string[]): Promise<Respon
       if (!versions.length) throw new ApiError(404, `blueprint ${a} does not exist`);
       return json(200, { name: a, versions });
     }
-    if (c === undefined && method === "PUT") return publish(request, env, a, b);
+    if (c === undefined && method === "PUT") {
+      admin();
+      return publish(request, env, a, b);
+    }
   }
 
   if (collection === "workspaces" && a !== undefined) {
     name(a);
     const ws = env.WORKSPACE.getByName(a);
     if (b === undefined && method === "PUT") {
+      admin();
       const body = await readJson(request);
       const quota = body.quota ?? DEFAULT_QUOTA;
       if (!Number.isInteger(quota) || quota < 0) throw new ApiError(400, "quota must be a whole number");
@@ -78,19 +96,42 @@ async function route(request: Request, env: Env, path: string[]): Promise<Respon
     const info = await ws.info();
     if (!info) throw new ApiError(404, `workspace ${a} does not exist`);
     if (b === undefined && method === "GET") return json(200, info);
-    if (b === "cells" && c === undefined && method === "GET") return json(200, { cells: await ws.listCells() });
-    if (b === "cells" && c === undefined && method === "POST") return createCell(request, env, a);
-    if (b === "cells" && c !== undefined && d === undefined) {
-      if (method === "GET") {
-        const cell = await ws.getCell(c);
-        if (!cell) throw new ApiError(404, "cell does not exist in this workspace");
-        return json(200, cell);
+    if (b === "cells" && c === undefined && method === "GET") {
+      const cells = (await ws.listCells()).filter((cell) => canSee(caller, cell));
+      return json(200, { cells });
+    }
+    if (b === "cells" && c === undefined && method === "POST") return createCell(request, env, a, caller);
+    if (b === "cells" && c !== undefined) {
+      const cell = await ws.getCell(c);
+      if (!cell || !canSee(caller, cell)) throw new ApiError(404, "cell does not exist in this workspace");
+      const owner = () => {
+        if (!owns(caller, cell)) throw new ApiError(403, "only the cell's owner can do this");
+      };
+      if (d === undefined && method === "GET") return json(200, cell);
+      if (d === undefined && method === "PATCH") {
+        owner();
+        return moveCell(request, env, a, cell);
       }
-      if (method === "PATCH") return moveCell(request, env, a, c);
-      if (method === "DELETE") {
+      if (d === undefined && method === "DELETE") {
+        owner();
         const result = await ws.deleteCell(c);
         if (!result.ok) throw new ApiError(result.status, result.error);
         return new Response(null, { status: 204 });
+      }
+      if (d === "shares" && e === undefined && method === "GET") {
+        owner();
+        return json(200, { shares: cell.shares });
+      }
+      if (d === "shares" && e !== undefined) {
+        owner();
+        const email = e.toLowerCase();
+        if (!email.includes("@")) throw new ApiError(400, "share with an email address");
+        if (method === "PUT") {
+          const role = (await readJson(request)).role;
+          if (role !== "viewer" && role !== "editor") throw new ApiError(400, "role must be viewer or editor");
+          return result(await ws.share(c, email, role as ShareRole));
+        }
+        if (method === "DELETE") return result(await ws.unshare(c, email));
       }
     }
   }
@@ -125,8 +166,14 @@ async function publish(request: Request, env: Env, blueprint: string, version: s
   return json(201, result.blueprint);
 }
 
-async function createCell(request: Request, env: Env, workspace: string): Promise<Response> {
+async function createCell(request: Request, env: Env, workspace: string, caller: Caller): Promise<Response> {
   const body = await readJson(request);
+  // A user owns the cells they create; the admin token names the owner.
+  let owner = caller.kind === "user" ? { user: caller.user, email: caller.email } : body.owner;
+  if (!owner || typeof owner.user !== "string" || !owner.user || typeof owner.email !== "string") {
+    throw new ApiError(400, "the admin token must name the cell's owner as {user, email}");
+  }
+  owner = { user: owner.user, email: owner.email.toLowerCase() };
   name(body.blueprint);
   if (body.version !== undefined && !isVersion(body.version)) throw new ApiError(400, "invalid version");
   const blueprint =
@@ -134,22 +181,28 @@ async function createCell(request: Request, env: Env, workspace: string): Promis
       ? await catalog(env).latest(body.blueprint)
       : await catalog(env).get(body.blueprint, body.version);
   if (!blueprint) throw new ApiError(404, "blueprint version does not exist");
-  const result = await env.WORKSPACE.getByName(workspace).createCell(blueprint);
-  if (!result.ok) throw new ApiError(result.status, result.error);
-  return json(201, result.value);
+  return result(await env.WORKSPACE.getByName(workspace).createCell(blueprint, owner), 201);
 }
 
-async function moveCell(request: Request, env: Env, workspace: string, id: string): Promise<Response> {
+async function moveCell(request: Request, env: Env, workspace: string, cell: CellRecord): Promise<Response> {
   const body = await readJson(request);
   if (!isVersion(body.version)) throw new ApiError(400, "version is required");
-  const ws = env.WORKSPACE.getByName(workspace);
-  const cell = await ws.getCell(id);
-  if (!cell) throw new ApiError(404, "cell does not exist in this workspace");
   const blueprint = await catalog(env).get(cell.blueprint, body.version);
   if (!blueprint) throw new ApiError(404, "blueprint version does not exist");
-  const result = await ws.moveCell(id, blueprint);
-  if (!result.ok) throw new ApiError(result.status, result.error);
-  return json(200, result.value);
+  return result(await env.WORKSPACE.getByName(workspace).moveCell(cell.id, blueprint));
+}
+
+function result<T>(r: { ok: true; value: T } | { ok: false; status: number; error: string }, status = 200): Response {
+  if (!r.ok) throw new ApiError(r.status, r.error);
+  return json(status, r.value);
+}
+
+function owns(caller: Caller, cell: CellRecord): boolean {
+  return caller.kind === "admin" || caller.user === cell.owner.user;
+}
+
+function canSee(caller: Caller, cell: CellRecord): boolean {
+  return owns(caller, cell) || (caller.kind === "user" && Object.hasOwn(cell.shares, caller.email));
 }
 
 function name(value: unknown): asserts value is string {

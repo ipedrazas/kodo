@@ -121,9 +121,9 @@ describe("websockets", () => {
     const ws = kernel.socket(`${await newCell()}.g.test`);
     await ws.opened;
     ws.send("hello");
-    assert.deepEqual(JSON.parse(await ws.next()), { n: 1, echo: "hello" });
+    assert.deepEqual(JSON.parse(await ws.next()), { n: 1, echo: "hello", role: "owner" });
     ws.send("again");
-    assert.deepEqual(JSON.parse(await ws.next()), { n: 2, echo: "again" });
+    assert.deepEqual(JSON.parse(await ws.next()), { n: 2, echo: "again", role: "owner" });
     ws.close();
   });
 

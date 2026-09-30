@@ -102,10 +102,10 @@ describe("workspaces and cells", () => {
     await kernel.api("PUT", "/workspaces/small", { quota: 2 });
     const a = await kernel.createCell("small", "notes");
     await kernel.createCell("small", "notes");
-    const over = await kernel.api("POST", "/workspaces/small/cells", { blueprint: "notes" });
+    const over = await kernel.api("POST", "/workspaces/small/cells", { blueprint: "notes" }, { as: "alice" });
     assert.equal(over.status, 409);
     assert.equal((await kernel.api("DELETE", `/workspaces/small/cells/${a.id}`)).status, 204);
-    assert.equal((await kernel.api("POST", "/workspaces/small/cells", { blueprint: "notes" })).status, 201);
+    assert.equal((await kernel.api("POST", "/workspaces/small/cells", { blueprint: "notes" }, { as: "alice" })).status, 201);
   });
 
   test("a deleted cell is no longer served", async () => {
@@ -125,12 +125,10 @@ describe("workspaces and cells", () => {
   });
 
   test("cells need an existing workspace and blueprint", async () => {
-    assert.equal((await kernel.api("POST", "/workspaces/nowhere/cells", { blueprint: "notes" })).status, 404);
-    assert.equal((await kernel.api("POST", "/workspaces/team/cells", { blueprint: "nothing" })).status, 404);
-    assert.equal(
-      (await kernel.api("POST", "/workspaces/team/cells", { blueprint: "notes", version: "9.9.9" })).status,
-      404,
-    );
+    const post = (ws, body) => kernel.api("POST", `/workspaces/${ws}/cells`, body, { as: "alice" });
+    assert.equal((await post("nowhere", { blueprint: "notes" })).status, 404);
+    assert.equal((await post("team", { blueprint: "nothing" })).status, 404);
+    assert.equal((await post("team", { blueprint: "notes", version: "9.9.9" })).status, 404);
   });
 });
 

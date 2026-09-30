@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -39,10 +40,18 @@ const (
 func peersServiceName(f *kodov1.Fleet) string  { return f.Name + "-peers" }
 func networkPolicyName(f *kodov1.Fleet) string { return f.Name + "-internal" }
 
-// kernelJobName changes with the kernel image, so each image is deployed by
-// its own Job.
+// AdminTokenSecretName is the Secret holding the token the operator uses on
+// the Fleet's kernel API, under the key "token".
+func AdminTokenSecretName(f *kodov1.Fleet) string { return f.Name + "-admin-token" }
+
+// kernelJobName changes with the kernel image and identity settings, so each
+// combination is deployed by its own Job.
 func kernelJobName(f *kodov1.Fleet) string {
-	sum := sha256.Sum256([]byte(f.Spec.Kernel))
+	key := f.Spec.Kernel
+	if a := f.Spec.Auth; a != nil {
+		key += "|" + a.Issuer + "|" + a.Audience + "|" + a.JWKSURL
+	}
+	sum := sha256.Sum256([]byte(key))
 	return f.Name + "-kernel-" + hex.EncodeToString(sum[:])[:10]
 }
 
@@ -80,6 +89,28 @@ func bucketEnv(f *kodov1.Fleet) []corev1.EnvVar {
 	}
 	if f.Spec.Bucket.Region != "" {
 		env = append(env, corev1.EnvVar{Name: "AWS_REGION", Value: f.Spec.Bucket.Region})
+	}
+	return env
+}
+
+// kernelAuthEnv is what the kernel image's deploy script reads for identity.
+func kernelAuthEnv(f *kodov1.Fleet) []corev1.EnvVar {
+	env := []corev1.EnvVar{{Name: "KERNEL_ADMIN_TOKEN", ValueFrom: &corev1.EnvVarSource{
+		SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: AdminTokenSecretName(f)},
+			Key:                  "token",
+		},
+	}}}
+	if a := f.Spec.Auth; a != nil {
+		jwks := a.JWKSURL
+		if jwks == "" {
+			jwks = strings.TrimSuffix(a.Issuer, "/") + "/keys"
+		}
+		env = append(env,
+			corev1.EnvVar{Name: "OIDC_ISSUER", Value: a.Issuer},
+			corev1.EnvVar{Name: "OIDC_AUDIENCE", Value: a.Audience},
+			corev1.EnvVar{Name: "OIDC_JWKS_URL", Value: jwks},
+		)
 	}
 	return env
 }
@@ -255,7 +286,7 @@ func desiredKernelJob(f *kodov1.Fleet) *batchv1.Job {
 					Containers: []corev1.Container{{
 						Name:            "deploy",
 						Image:           f.Spec.Kernel,
-						Env:             bucketEnv(f),
+						Env:             append(bucketEnv(f), kernelAuthEnv(f)...),
 						SecurityContext: restrictedSecurityContext(),
 					}},
 				},
