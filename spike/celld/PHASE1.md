@@ -24,8 +24,8 @@ The Phase 0 verdict holds for durability and fails for density. No test lost a c
 | Warm write latency explained | **Met.** Disk fsync. |
 | Behaviour beyond the Dynamic Worker limit known | **Met.** Memory runs out first, at about 100 bundles per node. |
 | WebSocket to a gadget survives hibernation; failover behaviour documented | **Partly.** Works for a plain Durable Object, including a 60 s idle and an owner kill; does not work inside a facet at all. |
-| CI brings up a fleet on kind and runs the kill test | **Pending.** The `fleet` job is in this PR; it runs for the first time on the PR. |
-| `celld diagnose` passes on Tigris, MinIO and AWS S3 | **Changed.** MinIO no longer publishes images on Docker Hub, so CI uses SeaweedFS instead. Tigris, SeaweedFS and RustFS pass. AWS S3 is not tested yet (no credentials). |
+| CI brings up a fleet on kind and runs the kill test | **Met.** The `fleet` job passes: 7379 acknowledged writes, none lost. |
+| `celld diagnose` passes on Tigris, MinIO and AWS S3 | **Changed.** MinIO no longer publishes images on Docker Hub, so CI uses SeaweedFS instead. Tigris, SeaweedFS and RustFS pass. AWS S3 was dropped from this phase. |
 
 ## The hang
 
@@ -107,7 +107,7 @@ The kernel will have to hold the WebSocket in the cell and pass messages to the 
 | SeaweedFS 3.97 (in cluster) | Pass; used for kind and CI |
 | RustFS (in cluster) | Pass |
 | MinIO | Not tested: no public image on Docker Hub any more |
-| AWS S3 | Not tested: needs credentials |
+| AWS S3 | Not tested; dropped from this phase |
 
 ## New in the repository
 
