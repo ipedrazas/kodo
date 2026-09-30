@@ -175,3 +175,9 @@ describe("the gadget API", () => {
     assert.equal(res.forged, "rejected");
   });
 });
+
+describe("version", () => {
+  test("reports the kernel build", async () => {
+    assert.deepEqual((await kernel.api("GET", "/version")).body, { build: "dev" });
+  });
+});

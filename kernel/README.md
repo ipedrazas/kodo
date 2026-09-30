@@ -19,6 +19,7 @@ Served under `/api/` on any host that is not a cell hostname. **It has no authen
 
 | Method | Path | Body | Result |
 | --- | --- | --- | --- |
+| GET | `/api/version` | | `{build}`, the kernel image's build identifier |
 | POST | `/api/bundles` | gadget source | 201 `{digest}` |
 | GET | `/api/blueprints` | | `{blueprints: [name]}` |
 | GET | `/api/blueprints/:name` | | `{name, versions: [...]}` |

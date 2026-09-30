@@ -38,3 +38,6 @@ bin/
 node_modules/
 .celld/
 .dev.vars
+
+# End-to-end results
+test/e2e/results/

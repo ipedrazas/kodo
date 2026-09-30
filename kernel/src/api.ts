@@ -1,3 +1,4 @@
+import { KERNEL_BUILD } from "./build";
 import type { Env } from "./env";
 import { sha256Hex } from "./http";
 import { isCapability, isDigest, isName, isVersion } from "./names";
@@ -6,6 +7,7 @@ import { isCapability, isDigest, isName, isVersion } from "./names";
 // Phase 5 puts identity in front of it; until then it has no authentication
 // and must only be reachable from inside the cluster.
 //
+//   GET    /api/version                               {build}
 //   POST   /api/bundles                               body: gadget source
 //   GET    /api/blueprints
 //   GET    /api/blueprints/:name
@@ -47,6 +49,7 @@ async function route(request: Request, env: Env, path: string[]): Promise<Respon
   const [collection, a, b, c, d, ...rest] = path;
   if (rest.length) throw new ApiError(404, "not found");
 
+  if (collection === "version" && a === undefined && method === "GET") return json(200, { build: KERNEL_BUILD });
   if (collection === "bundles" && a === undefined && method === "POST") return uploadBundle(request, env);
 
   if (collection === "blueprints") {

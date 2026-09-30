@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kodo-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kodo-operator
+  namespace: kodo-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kodo-operator
+  namespace: kodo-system
+  labels:
+    app.kubernetes.io/name: kodo-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kodo-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kodo-operator
+    spec:
+      serviceAccountName: kodo-operator
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: operator
+          image: ghcr.io/ipedrazas/kodo-operator:main
+          args: [--leader-elect]
+          ports:
+            - name: metrics
+              containerPort: 8080
+            - name: probes
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probes
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
