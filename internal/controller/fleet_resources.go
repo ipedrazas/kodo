@@ -24,9 +24,15 @@ const (
 	fleetLabel   = "kodo.dev/fleet"
 	roleLabel    = "kodo.dev/role"
 
+	// A stopping node keeps serving for this long before celld starts to
+	// drain, so Services stop routing to it first; otherwise requests that
+	// race the endpoint update get celld's 503.
+	preStopSeconds = 5
+
 	// celld stops a node within CELLD_SHUTDOWN_TOTAL_MS (40 s by default);
-	// the grace period must cover it or Kubernetes kills the node mid-handoff.
-	terminationGraceSeconds = 60
+	// the grace period must cover it, after the pre-stop wait, or Kubernetes
+	// kills the node mid-handoff.
+	terminationGraceSeconds = preStopSeconds + 60
 )
 
 // Names of the objects a Fleet owns.
@@ -146,6 +152,9 @@ func desiredStatefulSet(f *kodov1.Fleet) *appsv1.StatefulSet {
 								Port: intstr.FromString("http"),
 							}},
 							PeriodSeconds: 2,
+						},
+						Lifecycle: &corev1.Lifecycle{
+							PreStop: &corev1.LifecycleHandler{Sleep: &corev1.SleepAction{Seconds: preStopSeconds}},
 						},
 						Resources:       f.Spec.Resources,
 						SecurityContext: restrictedSecurityContext(),

@@ -42,7 +42,7 @@ spec:
 
 - **Kernel changes** start a new deploy Job for the new image. Nodes adopt the new kernel in place within one pointer poll (30 s), with no restart and no failed requests. `status.kernel` shows the last image that deployed successfully.
 - **celld changes** stop the fleet: mixed celld versions cannot share a fleet, so the operator scales the StatefulSet to zero on the old image, waits until every node pod is gone, then starts the new image. The fleet serves nothing in between: about 20 s on kind and 36 s on the k3s cluster under gVisor. The `Upgrading` condition is true until every node runs the new image.
-- **Shutdown** gives each node 60 s, above celld's 40 s handoff bound.
+- **Shutdown**: a stopping node keeps serving for 5 s so Services stop routing to it, then gets 60 s for celld's handoff, above its 40 s bound.
 - **The internal listener** (port 8081: the peer protocol and celld's unauthenticated operator API) accepts connections only from the fleet's own nodes. The cluster's network plugin must enforce NetworkPolicy.
 - **Deleting a Fleet** removes its pods, Services, Jobs and node volumes, and leaves the bucket untouched; a new Fleet on the same bucket finds every cell as it was.
 

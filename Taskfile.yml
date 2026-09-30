@@ -212,7 +212,7 @@ tasks:
     desc: Fail if generated operator files are out of date
     cmds:
       - task: operator:generate
-      - git diff --exit-code -- api config
+      - git diff --exit-code -- api/v1alpha1/zz_generated.deepcopy.go config/crd config/rbac/role.yaml
 
   operator:e2e:kind:
     desc: Run the operator end-to-end test on a kind cluster (needs Docker, kind and Go)

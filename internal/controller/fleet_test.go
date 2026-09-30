@@ -71,8 +71,9 @@ func TestNextNodeStep(t *testing.T) {
 func TestStatefulSet(t *testing.T) {
 	sts := desiredStatefulSet(testFleet())
 	pod := sts.Spec.Template.Spec
-	if got := ptr.Deref(pod.TerminationGracePeriodSeconds, 0); got <= 40 {
-		t.Errorf("termination grace %d s does not cover celld's 40 s shutdown", got)
+	preStop := pod.Containers[0].Lifecycle.PreStop.Sleep.Seconds
+	if got := ptr.Deref(pod.TerminationGracePeriodSeconds, 0); got <= preStop+40 {
+		t.Errorf("termination grace %d s does not cover a %d s pre-stop wait and celld's 40 s shutdown", got, preStop)
 	}
 	if ptr.Deref(pod.AutomountServiceAccountToken, true) {
 		t.Error("nodes get a ServiceAccount token")
