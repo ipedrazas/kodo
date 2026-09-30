@@ -16,7 +16,9 @@ Durable decisions that apply across all phases:
 - **Key models**: Fleet, Workspace, Blueprint (name, version, bundle digest, capabilities, tier), Cell (workspace, cell id, blueprint version, owner), Grant (user, cell, capability), Share (user, cell, role).
 - **Go services**: the operator, the Gatekeeper and a small metrics exporter. Go does not sit on the request path to a gadget.
 - **CRDs**: `Fleet`, `Blueprint`, `Workspace` under `kodo.dev/v1alpha1`. Cells never go in etcd.
-- **Bucket layout**: celld owns the layout under a fleet's prefix. Ours sits beside it: `bundles/sha256/<digest>`, `blueprints/<name>/<version>.json`, `audit/<yyyy>/<mm>/<dd>/`.
+- **Gatekeeper state**: the Gatekeeper is stateless. Encrypted tokens and approvals are bucket objects under prefixes only the Gatekeeper's credentials can read, never a fleet's. Every approval state change (pending → approved → executing → done, or rejected) is a conditional write, so two replicas cannot claim the same approval. An approval that fails mid-execution is reported as failed, not retried.
+- **Secrets**: tokens are encrypted through a vault interface and only the ciphertext is stored. OpenBao's transit engine is the first backend; a cloud KMS can follow. Platform secrets (bucket credentials, OIDC client secret, DNS-01 credentials) reach the cluster through External Secrets, from OpenBao where it is available. OpenBao is supported, not required.
+- **Bucket layout**: celld owns the layout under a fleet's prefix. Ours sits beside it: `bundles/sha256/<digest>`, `blueprints/<name>/<version>.json`, `vault/<user>/`, `approvals/<user>/<id>.json`, `audit/<yyyy>/<mm>/<dd>/`.
 - **Storage contract**: whatever `celld diagnose` accepts, which includes conditional writes and ranged reads. A provider that fails it is unsupported.
 - **Hostnames**: `<cell-id>.g.<domain>` for cells, `app.<domain>` for the shell UI, the agent chat and the API. One wildcard certificate via cert-manager DNS-01; celld does not terminate TLS.
 - **API**: under `app.<domain>/api/`, served by the kernel: workspaces, blueprints, cells, grants, shares.
@@ -162,7 +164,7 @@ A small exporter that turns celld's node leases and `/state` into Prometheus met
 
 ### What to build
 
-The Gatekeeper as a Go service outside every fleet, with an encrypted per-user token vault and per-request scope enforcement. A Blueprint declares capabilities, the user grants a subset per instance, and the kernel gives the gadget one binding per grant. A call on that binding goes to the kernel, which asserts the cell and grant to the Gatekeeper. GitHub read is the first provider. Default-deny egress goes onto fleet pods, and every request and decision is appended to `audit/`.
+The Gatekeeper as a stateless Go service outside every fleet, with per-request scope enforcement and a per-user token vault: tokens encrypted with OpenBao transit and stored as ciphertext under `vault/`. The Gatekeeper authenticates to OpenBao with its Kubernetes identity. A Blueprint declares capabilities, the user grants a subset per instance, and the kernel gives the gadget one binding per grant. A call on that binding goes to the kernel, which asserts the cell and grant to the Gatekeeper. GitHub read is the first provider. Default-deny egress goes onto fleet pods, and every request and decision is appended to `audit/`.
 
 ### Acceptance criteria
 
@@ -171,7 +173,9 @@ The Gatekeeper as a Go service outside every fleet, with an encrypted per-user t
 - [ ] A gadget without the grant has no binding at all
 - [ ] The Gatekeeper rejects a call that does not come from a fleet it trusts
 - [ ] Direct outbound connections from a fleet pod fail, except to the Gatekeeper, inference gateway and bucket
-- [ ] OAuth tokens are encrypted at rest and never reach a fleet
+- [ ] OAuth tokens are stored only as ciphertext, the Gatekeeper holds no encryption key, and no token reaches a fleet
+- [ ] A fleet's bucket credentials cannot read `vault/` or `approvals/`
+- [ ] The vault backend is an interface with OpenBao transit as its one implementation
 - [ ] Each call is in the audit log with user, gadget, cell, grant and decision
 
 ---
@@ -182,12 +186,13 @@ The Gatekeeper as a Go service outside every fleet, with an encrypted per-user t
 
 ### What to build
 
-The Gatekeeper classifies calls by verb. Writes, sends and deletes are parked; the user sees the pending action in the shell UI, approves or rejects it, and only then does the call run. An email provider is the first side-effecting integration.
+The Gatekeeper classifies calls by verb. Writes, sends and deletes are parked as objects under `approvals/`, each state change a conditional write; the user sees the pending action in the shell UI, approves or rejects it, and only then does the call run. An email provider is the first side-effecting integration.
 
 ### Acceptance criteria
 
 - [ ] A gadget drafts an email and the send waits in the queue
-- [ ] Approving runs the call exactly once; rejecting never runs it
+- [ ] Approving runs the call at most once, even with two Gatekeeper replicas racing; rejecting never runs it
+- [ ] A Gatekeeper killed mid-execution leaves the approval reported as failed, not silently retried or lost
 - [ ] The gadget observes the pending, approved and rejected outcomes
 - [ ] Pending approvals survive a Gatekeeper restart and cell hibernation
 - [ ] Audit records who approved what, and when
@@ -274,7 +279,7 @@ A fleet per tenant or trust tier, each with its own bucket prefix, credentials a
 
 ### What to build
 
-A single Helm chart for the whole platform with documented prerequisites (Gateway API, cert-manager, KEDA, a bucket, an IdP), a preflight check that runs `celld diagnose` against the customer's bucket, and an install guide.
+A single Helm chart for the whole platform with documented prerequisites (Gateway API, cert-manager, KEDA, External Secrets, a bucket, an IdP, and OpenBao or another supported vault backend), a preflight check that runs `celld diagnose` against the customer's bucket, and an install guide.
 
 ### Acceptance criteria
 
