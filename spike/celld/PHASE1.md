@@ -55,6 +55,8 @@ A warm write costs about 120 ms. It is the node disks:
 | Follower persist per append (celld log) | ~28 ms |
 | Synchronous 4 KiB write, `dd oflag=dsync`, each node, runc and gVisor alike | ~100 ms |
 
+The first CI run confirms it: the same fleet and kill test on a GitHub runner's disk acknowledged 7379 writes at p50 3 ms and p95 4 ms, with one unacknowledged error and nothing lost.
+
 Reads are fast: a warm read-only gadget request takes 4–30 ms. Fleet nodes need disks with low fsync latency. The same slowness makes followers miss celld's 1.5 s backstop under load (`gray follower evicted`), after which writes wait for the bucket.
 
 ## Activation against database size
