@@ -1,6 +1,7 @@
 // Runs the kernel under `celld dev` for the tests, from a temporary copy of
 // the project (celld requires `main` inside the project), so .dev.vars and
 // the local state stay out of the repository. Needs celld and esbuild on PATH.
+// Paths given to publish() are relative to the kernel directory.
 import { spawn } from "node:child_process";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
@@ -17,7 +18,7 @@ export async function startKernel({ vars = {}, env = {} } = {}) {
   await cp(join(kernel, "src"), join(dir, "src"), { recursive: true });
   await writeFile(
     join(dir, ".dev.vars"),
-    Object.entries({ KERNEL_DEV: "1", ...vars }).map(([k, v]) => `${k}=${v}`).join("\n"),
+    Object.entries(vars).map(([k, v]) => `${k}=${v}`).join("\n"),
   );
 
   const port = 20000 + Math.floor(Math.random() * 20000);
@@ -34,18 +35,36 @@ export async function startKernel({ vars = {}, env = {} } = {}) {
     logs: () => logs.join(""),
     request: (host, path = "/", options = {}) => request(port, host, path, options),
     socket: (host) => socket(port, host),
-    putBundle: async (file) => {
-      const body = await readFile(join(kernel, "test", "gadgets", file));
-      const res = await request(port, "localhost", "/_dev/bundles", { method: "PUT", body });
-      if (res.status !== 200) throw new Error(`bundle upload failed: ${res.status} ${res.body}`);
-      return JSON.parse(res.body).digest;
-    },
-    bindCell: async (cell, digest) => {
-      const res = await request(port, "localhost", `/_dev/cells/${cell}`, {
-        method: "PUT",
-        body: JSON.stringify({ bundle: digest }),
+    // Calls the kernel API. Returns {status, body} with body parsed as JSON
+    // when it is JSON.
+    api: async (method, path, body) => {
+      const res = await request(port, "api.test", `/api${path}`, {
+        method,
+        headers: body === undefined ? {} : { "content-type": "application/json" },
+        body: body === undefined ? undefined : typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body),
       });
-      if (res.status !== 200) throw new Error(`cell bind failed: ${res.status} ${res.body}`);
+      let parsed = res.body;
+      try {
+        parsed = JSON.parse(res.body);
+      } catch {
+        // Not JSON.
+      }
+      return { status: res.status, body: parsed };
+    },
+    // Uploads a gadget file and publishes it as blueprint name@version.
+    publish: async (file, name, version) => {
+      const source = await readFile(resolve(kernel, file));
+      const upload = await kernelApi.api("POST", "/bundles", source);
+      if (upload.status !== 201) throw new Error(`upload failed: ${JSON.stringify(upload)}`);
+      const res = await kernelApi.api("PUT", `/blueprints/${name}/${version}`, { bundle: upload.body.digest });
+      if (res.status !== 201) throw new Error(`publish failed: ${JSON.stringify(res)}`);
+      return res.body;
+    },
+    // Creates a cell in a workspace and returns its record.
+    createCell: async (workspace, blueprint, version) => {
+      const res = await kernelApi.api("POST", `/workspaces/${workspace}/cells`, { blueprint, version });
+      if (res.status !== 201) throw new Error(`create cell failed: ${JSON.stringify(res)}`);
+      return res.body;
     },
     stop: async () => {
       child.kill("SIGTERM");
