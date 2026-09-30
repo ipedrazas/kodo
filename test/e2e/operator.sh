@@ -121,12 +121,15 @@ cell=$(api POST /workspaces/e2e/cells '{"blueprint":"fixture"}' | head -1 | sed 
 echo "cell $cell serves the fixture gadget"
 
 step "3. Internal listener"
-# A dropped connection times out (curl exit 28); a refusal or a DNS failure
-# would mean the check tested nothing.
+# The same node's public port answers, so the name resolves and the pod is
+# reachable; its internal port must then be blocked. Network plugins either
+# drop (curl exit 28, timeout) or reject (exit 7, refused) such connections.
+public=$("${k[@]}" exec client -- curl -s -m 5 -o /dev/null -w '%{http_code}' "http://kodo-0.kodo-peers:8080/.well-known/celld/health")
+[[ $public == 200 ]] || fail "node kodo-0 public port answered $public"
 code=0
 "${k[@]}" exec client -- curl -s -m 5 -o /dev/null "http://kodo-0.kodo-peers:8081/state" || code=$?
-[[ $code == 28 ]] || fail "internal listener check: curl exit $code, want 28 (timed out)"
-echo "closed to other pods; public listener still serves: $(cell_get "$cell")"
+[[ $code == 7 || $code == 28 ]] || fail "internal listener check: curl exit $code, want 7 or 28"
+echo "internal port closed to other pods (curl exit $code); public port open"
 
 step "4. Kernel rollout under load"
 start_writer "$cell" "$results/kernel-rollout.log"

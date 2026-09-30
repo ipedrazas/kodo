@@ -27,6 +27,7 @@ Durable decisions that apply across all phases:
 - **Isolation**: a gadget is a V8 isolate in a process shared with other gadgets of the same fleet; celld makes no claim beyond that. The kernel boundary is gVisor on the fleet's pods. Mutually distrusting tenants get a fleet each.
 - **Egress**: default-deny NetworkPolicy on fleet pods; egress only to the Gatekeeper, the inference gateway and the bucket endpoint. celld's internal listener is unauthenticated for operator actions, so it is reachable only from pods of the same fleet.
 - **Upgrades**: mixed celld versions cannot share a fleet, so a celld upgrade stops a fleet and restarts it. Kernel deployments roll without a restart.
+- **Kernel delivery**: the kernel ships as an image (celld, esbuild and the kernel source) that the operator runs as a Job against the fleet's bucket. The operator reaches each kernel API through the Kubernetes API server's service proxy. Images are published to GHCR by CI.
 - **Metric labels**: workspace and blueprint only; user and cell detail lives in traces, logs and audit.
 - **Environments**: kind with SeaweedFS for local development and CI (MinIO no longer publishes images); the k3s cluster with gVisor and Tigris for integration, performance and demos.
 - **Node disks**: fleet nodes need low fsync latency; celld's write latency and follower health follow it directly (Phase 1 measured about 100 ms per fsync on the k3s nodes and 120 ms per write).

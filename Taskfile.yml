@@ -218,3 +218,11 @@ tasks:
     desc: Run the operator end-to-end test on a kind cluster (needs Docker, kind and Go)
     cmds:
       - test/e2e/kind.sh
+
+  operator:e2e:cluster:
+    desc: Run the operator end-to-end test on TARGET=k3s (KERNEL_IMAGE, KERNEL_IMAGE_2, optional OPERATOR_IMAGE)
+    env:
+      CONTEXT: "{{.CONTEXT}}"
+      RUNTIME_CLASS: gvisor
+    cmds:
+      - test/e2e/cluster.sh
