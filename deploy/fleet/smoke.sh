@@ -1,29 +1,37 @@
 #!/usr/bin/env bash
-# Checks a deployed fleet end to end: uploads the kernel's fixture gadget,
-# binds a cell to it, and requests the cell through the fleet Service from a
-# pod in the namespace. Fails unless the cell answers and keeps its count.
-# usage: smoke.sh k3s|kind CONTEXT
+# Checks a deployed fleet end to end through the kernel API: publishes the
+# sample notes gadget, creates a cell from it, and fails unless the cell
+# stores a note and returns it.
+# usage: smoke.sh CONTEXT
 set -euo pipefail
-target=$1 context=$2
+context=$1
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
+api() { "$here/api.sh" "$context" "$@"; }
 k=(kubectl --context "$context" -n kodo)
 
-digest=$("$here/gadget.sh" "$target" put "$root/kernel/test/gadgets/fixture.js")
-cell="smoke-$(date +%s)"
-"$here/gadget.sh" "$target" bind "$cell" "$digest"
-
-"${k[@]}" get pod client >/dev/null 2>&1 ||
-  "${k[@]}" run client --image=curlimages/curl:8.16.0 --restart=Never --command -- sleep 604800
-"${k[@]}" wait --for=condition=Ready pod/client --timeout=120s >/dev/null
-
-get() { "${k[@]}" exec client -- curl -s -m 30 -H "Host: $cell.g.test" http://celld/; }
 # A new deployment reaches every node within one pointer poll (30 s).
 for _ in $(seq 1 20); do
-  first=$(get) && [[ $first == *'"n":1'* ]] && break
+  out=$(api PUT /workspaces/smoke '{"quota":1000}') && [[ $(tail -1 <<< "$out") == 200 ]] && break
   sleep 3
 done
-second=$(get)
-echo "first: $first"
-echo "second: $second"
-[[ $first == *'"n":1'* && $second == *'"n":2'* ]]
+digest=$(api POST /bundles "@$root/kernel/examples/notes.js" | head -1 | sed -E 's/.*"digest":"([0-9a-f]+)".*/\1/')
+version="smoke-$(date +%s)"
+api PUT "/blueprints/notes/$version" "{\"bundle\":\"$digest\"}" >/dev/null
+cell=$(api POST /workspaces/smoke/cells "{\"blueprint\":\"notes\",\"version\":\"$version\"}" |
+  head -1 | sed -E 's/.*"id":"([a-z0-9]+)".*/\1/')
+echo "cell $cell runs notes $version ($digest)"
+
+"${k[@]}" exec client -- curl -sS -m 30 -X POST -H "Host: $cell.g.kodo" --data-binary 'smoke test' http://celld/ >/dev/null
+notes=$("${k[@]}" exec client -- curl -sS -m 30 -H "Host: $cell.g.kodo" http://celld/)
+echo "notes: $notes"
+[[ $notes == '["smoke test"]' ]]
+
+"${k[@]}" exec client -- curl -sS -m 30 -X POST -H "Host: $cell.g.kodo" 'http://celld/remind?in=1000' >/dev/null
+for _ in $(seq 1 20); do
+  status=$("${k[@]}" exec client -- curl -sS -m 30 -H "Host: $cell.g.kodo" http://celld/status)
+  [[ $status == *'"reminders":1'* ]] && break
+  sleep 1
+done
+echo "status: $status"
+[[ $status == *'"reminders":1'* ]]

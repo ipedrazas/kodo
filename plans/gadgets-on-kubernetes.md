@@ -18,7 +18,7 @@ Durable decisions that apply across all phases:
 - **CRDs**: `Fleet`, `Blueprint`, `Workspace` under `kodo.dev/v1alpha1`. Cells never go in etcd.
 - **Gatekeeper state**: the Gatekeeper is stateless. Encrypted tokens and approvals are bucket objects under prefixes only the Gatekeeper's credentials can read, never a fleet's. Every approval state change (pending → approved → executing → done, or rejected) is a conditional write, so two replicas cannot claim the same approval. An approval that fails mid-execution is reported as failed, not retried.
 - **Secrets**: tokens are encrypted through a vault interface and only the ciphertext is stored. OpenBao's transit engine is the first backend; a cloud KMS can follow. Platform secrets (bucket credentials, OIDC client secret, DNS-01 credentials) reach the cluster through External Secrets, from OpenBao where it is available. OpenBao is supported, not required.
-- **Bucket layout**: celld owns the layout of a fleet's bucket. What the kernel reads goes through R2 bindings, which celld stores under `r2/<bucket_name>/`: `r2/bundles/sha256/<digest>.js` and, until Phase 3, `r2/cells/<cell-id>.json`. Objects outside any fleet (`blueprints/<name>/<version>.json`, `vault/<user>/`, `approvals/<user>/<id>.json`, `audit/<yyyy>/<mm>/<dd>/`) sit beside it under their own prefixes.
+- **Bucket layout**: celld owns the layout of a fleet's bucket. Gadget bundles go through an R2 binding, which celld stores under `r2/bundles/sha256/<digest>.js`. Blueprint versions, workspaces and cell bindings are Durable Objects of the kernel (`Catalog`, `Workspace`, `Cell`), so they live in celld's cell state rather than as objects of ours. Objects outside any fleet (`vault/<user>/`, `approvals/<user>/<id>.json`, `audit/<yyyy>/<mm>/<dd>/`) sit beside it under their own prefixes.
 - **Storage contract**: whatever `celld diagnose` accepts, which includes conditional writes and ranged reads. A provider that fails it is unsupported.
 - **Hostnames**: `<cell-id>.g.<domain>` for cells, `app.<domain>` for the shell UI, the agent chat and the API. One wildcard certificate via cert-manager DNS-01; celld does not terminate TLS.
 - **API**: under `app.<domain>/api/`, served by the kernel: workspaces, blueprints, cells, grants, shares.
@@ -74,7 +74,7 @@ The kernel as a real project in the repository, with its build, tests and deploy
 
 ### What to build
 
-The Workspace registry and the first version of the API. Publishing a Blueprint version stores its manifest (bundle digest, declared capabilities, tier) under `blueprints/`. Creating a cell from a Blueprint in a Workspace records it in that Workspace's registry and pins the Blueprint version. The gadget API is written down: what a gadget exports, what it receives, what it cannot do.
+The Workspace registry and the first version of the API. Publishing a Blueprint version records its manifest (bundle digest, declared capabilities, tier) in the kernel's catalog. Creating a cell from a Blueprint in a Workspace records it in that Workspace's registry and pins the Blueprint version. The gadget API is written down: what a gadget exports, what it receives, what it cannot do.
 
 ### Acceptance criteria
 

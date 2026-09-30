@@ -11,12 +11,18 @@
   "worker_loaders": [{ "binding": "LOADER" }],
   "r2_buckets": [
     // Gadget bundles, keyed sha256/<digest>.js.
-    { "binding": "BUNDLES", "bucket_name": "bundles" },
-    // Cell manifests, keyed <cell-id>.json. Written by hand until Phase 3.
-    { "binding": "CELLS", "bucket_name": "cells" }
+    { "binding": "BUNDLES", "bucket_name": "bundles" }
   ],
   "durable_objects": {
-    "bindings": [{ "name": "CELL", "class_name": "Cell" }]
+    "bindings": [
+      { "name": "CELL", "class_name": "Cell" },
+      { "name": "CATALOG", "class_name": "Catalog" },
+      { "name": "WORKSPACE", "class_name": "Workspace" },
+      { "name": "KEYS", "class_name": "Keys" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Cell"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Cell"] },
+    { "tag": "v2", "new_sqlite_classes": ["Catalog", "Workspace", "Keys"] }
+  ]
 }

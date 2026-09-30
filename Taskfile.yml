@@ -185,9 +185,9 @@ tasks:
       - deploy/fleet/with-bucket.sh {{.TARGET}} celld deploy kernel
 
   kernel:smoke:
-    desc: Serve the fixture gadget from a new cell on TARGET and check it answers
+    desc: Publish the sample gadget on TARGET, create a cell from it and check it works
     cmds:
-      - deploy/fleet/smoke.sh {{.TARGET}} {{.CONTEXT}}
+      - deploy/fleet/smoke.sh {{.CONTEXT}}
 
   kernel:up:
     desc: Fleet, kernel and smoke test on TARGET in one go
@@ -197,12 +197,7 @@ tasks:
       - task: fleet:wait
       - task: kernel:smoke
 
-  gadget:put:
-    desc: Upload a gadget bundle to TARGET and print its digest (FILE=path)
+  api:
+    desc: Call the kernel API on TARGET from inside the cluster (METHOD=GET ROUTE=/blueprints BODY='json' or BODY=@file)
     cmds:
-      - deploy/fleet/gadget.sh {{.TARGET}} put {{.FILE}}
-
-  cell:bind:
-    desc: Bind a cell to a bundle on TARGET (CELL=id BUNDLE=digest)
-    cmds:
-      - deploy/fleet/gadget.sh {{.TARGET}} bind {{.CELL}} {{.BUNDLE}}
+      - deploy/fleet/api.sh {{.CONTEXT}} {{.METHOD | default "GET"}} {{.ROUTE}} {{if .BODY}}{{shellQuote .BODY}}{{end}}

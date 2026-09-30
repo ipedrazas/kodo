@@ -6,6 +6,7 @@ import { DurableObject } from "cloudflare:workers";
 //   ?throw   throws
 //   ?spin    busy-loops for 20 s of CPU
 //   ?probe   reports its bindings and whether outbound fetch works
+//   ?forge=C asks the host to set an alarm for cell C with made-up props
 // WebSocket messages are echoed with a count of messages seen.
 export class App extends DurableObject {
   async fetch(request) {
@@ -15,6 +16,15 @@ export class App extends DurableObject {
     if (url.searchParams.has("spin")) {
       const end = Date.now() + 20_000;
       while (Date.now() < end);
+    }
+    if (url.searchParams.has("forge")) {
+      const props = { cell: url.searchParams.get("forge"), token: btoa("not a real token") };
+      try {
+        await this.env.KODO.setAlarm(props, Date.now() + 60_000);
+        return Response.json({ forged: "accepted" });
+      } catch (err) {
+        return Response.json({ forged: "rejected", error: err.message });
+      }
     }
     if (url.searchParams.has("probe")) {
       let outbound;
