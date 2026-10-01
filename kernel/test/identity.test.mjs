@@ -144,6 +144,7 @@ describe("what the gadget sees", () => {
     assert.equal(headers["x-kodo-user"], "sub-bob");
     assert.equal(headers["x-kodo-email"], "bob@test");
     assert.equal(headers["x-kodo-role"], "editor");
+    assert.equal(headers["x-kodo-workspace"], "team");
     assert.equal(headers["x-kodo-identity"], undefined);
     assert.equal(headers["x-kodo-caller"], undefined);
     assert.equal(headers.cookie, "theme=dark");

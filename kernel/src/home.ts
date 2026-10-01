@@ -1,6 +1,8 @@
 // The page at the root of app.<domain>, where a login lands. It is a small
 // client of the API until the shell UI arrives: who you are, your cells in a
-// workspace, creating a cell from a Blueprint, and sharing it.
+// workspace, creating a cell from a Blueprint, sharing it, and granting it
+// capabilities. ?workspace=<ws>&cell=<id> opens on one cell, so a gadget
+// missing a grant can send its owner here.
 export const HOME_PAGE = `<!doctype html>
 <html lang="en">
 <head>
@@ -19,6 +21,14 @@ export const HOME_PAGE = `<!doctype html>
   input, select, button { font: inherit; padding: .25rem .5rem; }
   form { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
   #error { color: #b91c1c; min-height: 1.5em; }
+  tr.details td { border-bottom: 1px solid var(--line); padding: .2rem .5rem .8rem; }
+  tr.main td { border-bottom: 0; }
+  tr.focus td { background: rgba(250, 204, 21, .15); }
+  .grants { display: flex; flex-wrap: wrap; gap: .35rem; margin: .25rem 0 .5rem; }
+  .grant { font: 13px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 1rem; padding: .05rem .5rem; }
+  .grant button { border: 0; background: none; padding: 0 0 0 .3rem; cursor: pointer; color: var(--muted); }
+  .grant-form input { font: 13px ui-monospace, monospace; min-width: 22rem; }
+  .label { font-size: .85rem; color: var(--muted); margin-right: .25rem; }
 </style>
 </head>
 <body>
@@ -36,8 +46,8 @@ export const HOME_PAGE = `<!doctype html>
 
 <h2>Your cells</h2>
 <table>
-  <thead><tr><th>Cell</th><th>Blueprint</th><th>Owner</th><th>Shared with</th><th></th></tr></thead>
-  <tbody id="cells"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+  <thead><tr><th>Cell</th><th>Blueprint</th><th>Owner</th><th>Shared with</th></tr></thead>
+  <tbody id="cells"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
 </table>
 
 <h2>New cell</h2>
@@ -50,6 +60,10 @@ export const HOME_PAGE = `<!doctype html>
 const $ = (id) => document.getElementById(id);
 const cellDomain = location.hostname.replace(/^app\\./, "g.");
 let me;
+// Capabilities each Blueprint version declares, by "name version".
+const declared = {};
+const params = new URLSearchParams(location.search);
+let focusCell = params.get("cell");
 
 async function call(method, path, body) {
   const res = await fetch("/api" + path, {
@@ -71,6 +85,15 @@ function el(tag, text, attrs = {}) {
   return e;
 }
 
+async function capabilities(blueprint, version) {
+  const key = blueprint + " " + version;
+  if (!declared[key]) {
+    const { versions } = await call("GET", "/blueprints/" + blueprint);
+    for (const v of versions) declared[blueprint + " " + v.version] = v.capabilities ?? [];
+  }
+  return declared[key] ?? [];
+}
+
 async function loadCells() {
   const ws = $("workspace").value;
   localStorage.setItem("kodo.workspace", ws);
@@ -78,30 +101,21 @@ async function loadCells() {
   try {
     const { cells } = await call("GET", "/workspaces/" + ws + "/cells");
     rows.replaceChildren();
-    if (!cells.length) rows.append(el("tr")).append(el("td", "No cells yet.", { colSpan: 5, className: "muted" }));
+    if (!cells.length) rows.append(el("tr")).append(el("td", "No cells yet.", { colSpan: 4, className: "muted" }));
     for (const cell of cells) {
-      const tr = rows.appendChild(el("tr"));
+      const owned = cell.owner.user === me.user;
+      const tr = rows.appendChild(el("tr", undefined, { className: owned ? "main" : "", id: "cell-" + cell.id }));
       const link = el("a", cell.id, { href: "https://" + cell.id + "." + cellDomain + "/", target: "_blank" });
       tr.append(el("td")); tr.lastChild.append(link);
       tr.append(el("td", cell.blueprint + " " + cell.version));
-      tr.append(el("td", cell.owner.user === me.user ? "you" : cell.owner.email));
+      tr.append(el("td", owned ? "you" : cell.owner.email));
       tr.append(el("td", Object.entries(cell.shares).map(([e, r]) => e + " (" + r + ")").join(", ") || "—"));
-      const actions = tr.appendChild(el("td"));
-      if (cell.owner.user === me.user) {
-        const form = actions.appendChild(el("form"));
-        const email = form.appendChild(el("input", undefined, { type: "email", placeholder: "email", required: true }));
-        const role = form.appendChild(el("select"));
-        role.append(el("option", "viewer"), el("option", "editor"), el("option", "revoke", { value: "" }));
-        form.append(el("button", "Share"));
-        form.onsubmit = async (ev) => {
-          ev.preventDefault();
-          try {
-            const path = "/workspaces/" + ws + "/cells/" + cell.id + "/shares/" + encodeURIComponent(email.value);
-            if (role.value) await call("PUT", path, { role: role.value });
-            else await call("DELETE", path);
-            show(); loadCells();
-          } catch (err) { show(err); }
-        };
+      if (owned) rows.append(await details(ws, cell));
+      if (cell.id === focusCell) {
+        for (const r of [tr, tr.nextSibling]) r?.classList.add("focus");
+        tr.scrollIntoView({ block: "center" });
+        tr.nextSibling?.querySelector(".grant-form input")?.focus();
+        focusCell = null;
       }
     }
     show();
@@ -109,6 +123,55 @@ async function loadCells() {
     rows.replaceChildren();
     show(err);
   }
+}
+
+// What the owner can do with a cell: its grants, and sharing it.
+async function details(ws, cell) {
+  const tr = el("tr", undefined, { className: "details" });
+  const td = tr.appendChild(el("td", undefined, { colSpan: 4 }));
+  const base = "/workspaces/" + ws + "/cells/" + cell.id;
+  const setGrants = async (grants) => {
+    try { await call("PUT", base + "/grants", { grants }); show(); loadCells(); } catch (err) { show(err); }
+  };
+
+  const grants = td.appendChild(el("div", undefined, { className: "grants" }));
+  grants.append(el("span", "Grants", { className: "label" }));
+  if (!cell.grants.length) grants.append(el("span", "none", { className: "muted" }));
+  for (const g of cell.grants) {
+    const chip = grants.appendChild(el("span", g, { className: "grant" }));
+    chip.append(el("button", "✕", { title: "Take back " + g, onclick: () => setGrants(cell.grants.filter((x) => x !== g)) }));
+  }
+  const offered = (await capabilities(cell.blueprint, cell.version)).filter((c) => !cell.grants.includes(c));
+  if (offered.length) {
+    // A declared capability with a * is a template: the owner names the
+    // concrete resource, e.g. inference:model/default:invoke.
+    const form = td.appendChild(el("form", undefined, { className: "grant-form" }));
+    form.append(el("span", "Grant", { className: "label" }));
+    const pick = form.appendChild(el("select", undefined, { ariaLabel: "Declared capability" }));
+    for (const c of offered) pick.append(el("option", c));
+    const input = form.appendChild(el("input", undefined, { required: true, value: offered[0], ariaLabel: "Capability to grant" }));
+    pick.onchange = () => { input.value = pick.value; input.focus(); };
+    form.append(el("button", "Grant"));
+    form.append(el("span", "replace each * with what to allow", { className: "muted", hidden: !offered.some((c) => c.includes("*")) }));
+    form.onsubmit = (ev) => { ev.preventDefault(); setGrants([...cell.grants, input.value.trim()]); };
+  }
+
+  const share = td.appendChild(el("form"));
+  share.append(el("span", "Share", { className: "label" }));
+  const email = share.appendChild(el("input", undefined, { type: "email", placeholder: "email", required: true }));
+  const role = share.appendChild(el("select"));
+  role.append(el("option", "viewer"), el("option", "editor"), el("option", "revoke", { value: "" }));
+  share.append(el("button", "Share"));
+  share.onsubmit = async (ev) => {
+    ev.preventDefault();
+    try {
+      const path = base + "/shares/" + encodeURIComponent(email.value);
+      if (role.value) await call("PUT", path, { role: role.value });
+      else await call("DELETE", path);
+      show(); loadCells();
+    } catch (err) { show(err); }
+  };
+  return tr;
 }
 
 // Calls waiting for the user's approval, from the Gatekeeper, if this
@@ -140,7 +203,7 @@ $("create-form").onsubmit = async (ev) => {
     $("who").textContent = me.email || me.user;
     const { blueprints } = await call("GET", "/blueprints");
     for (const name of blueprints) $("blueprint").append(el("option", name));
-    $("workspace").value = localStorage.getItem("kodo.workspace") || "team";
+    $("workspace").value = params.get("workspace") || localStorage.getItem("kodo.workspace") || "team";
     loadCells();
     loadApprovals();
   } catch (err) { show(err); }

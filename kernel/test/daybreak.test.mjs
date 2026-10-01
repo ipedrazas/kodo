@@ -51,6 +51,7 @@ test("members join by opening the cell; only the circle and its owner can", asyn
   const state = (await call("bob", "GET", "/api/state")).body;
   assert.deepEqual(state.members.map((m) => m.email), ["alice@test", "bob@test", "carol@test"]);
   assert.deepEqual(state.me, { email: "bob@test", role: "editor" });
+  assert.deepEqual([state.cell, state.workspace], [cell, "friends"]);
 });
 
 test("free time is merged, checked, and seen by the circle", async () => {

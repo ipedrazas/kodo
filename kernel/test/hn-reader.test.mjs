@@ -67,10 +67,14 @@ const call = async (path, { as = "alice", method = "GET", body } = {}) => {
 };
 const webCalls = () => kernel.gatekeeper.calls.filter((c) => c.cell === cell && c.capability === WEB);
 
-test("without the web grant there is nothing to read", async () => {
+test("without the web grant there is nothing to read, and setup says where to grant it", async () => {
   const res = await call("/api/stories");
   assert.equal(res.status, 403);
   assert.match(res.body.error, /no grant/);
+  assert.deepEqual((await call("/api/setup")).body, { web: false, models: [], role: "owner", cell, workspace: "news" });
+  assert.equal((await call("/api/setup", { as: "bob" })).body.role, "editor");
+  const page = await kernel.request(`${cell}.g.test`, "/", { as: "alice" });
+  assert.match(page.body, /Grant them on the kodo home page/);
 });
 
 test("lists come from the HN API through the grant, once per five minutes", async () => {
