@@ -1,0 +1,134 @@
+# The models gadgets can be granted, inference:model/<name>:invoke, and the
+# backends that serve them. A gadget names only the model; which backend
+# answers is decided here, so changing a rule moves every gadget that uses
+# that model with no change to any of them.
+#
+#   default   OpenRouter, meta-llama/llama-3.1-8b-instruct
+#   sim       the in-cluster simulator (free; answers with the prompt)
+#
+# A backend sees x-kodo-user (the owner's subject at the identity provider),
+# x-kodo-workspace and x-kodo-blueprint. Envoy charges the budgets in
+# budgets.yaml when the response ends, from the request headers as they were
+# sent upstream, so removing them here would stop the budgets counting. The
+# Gatekeeper sends no email address, cell or credential; the gateway's own
+# key is removed by gateway.yaml.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: kodo-inference
+  namespace: kodo-inference
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: kodo-inference
+  rules:
+    - name: default
+      matches:
+        - headers:
+            - name: x-ai-eg-model
+              value: default
+      backendRefs:
+        - name: openrouter
+          modelNameOverride: meta-llama/llama-3.1-8b-instruct
+      timeouts:
+        request: 20s
+    - name: sim
+      matches:
+        - headers:
+            - name: x-ai-eg-model
+              value: sim
+      backendRefs:
+        - name: sim
+          modelNameOverride: kodo-sim
+      timeouts:
+        request: 20s
+  # What each call used, for the budgets in budgets.yaml.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_total_token
+      type: TotalToken
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: openrouter
+  namespace: kodo-inference
+spec:
+  schema:
+    name: OpenAI
+    prefix: /api/v1
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: openrouter
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: openrouter
+  namespace: kodo-inference
+spec:
+  endpoints:
+    - fqdn:
+        hostname: openrouter.ai
+        port: 443
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: openrouter
+  namespace: kodo-inference
+spec:
+  targetRefs:
+    - group: gateway.envoyproxy.io
+      kind: Backend
+      name: openrouter
+  validation:
+    wellKnownCACertificates: System
+    hostname: openrouter.ai
+---
+# The platform's OpenRouter key, from Secret openrouter (key apiKey), which
+# task k3s:inference creates from OPENROUTER_API_KEY. Gadgets and fleets
+# never see it.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: openrouter
+  namespace: kodo-inference
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: openrouter
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: openrouter
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: sim
+  namespace: kodo-inference
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: sim
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: sim
+  namespace: kodo-inference
+spec:
+  endpoints:
+    - fqdn:
+        hostname: sim.kodo-inference.svc.cluster.local
+        port: 8000

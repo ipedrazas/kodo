@@ -1,7 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
 import type { BlueprintVersion } from "./catalog";
 import type { Env } from "./env";
-import { type ApprovalStatus, GADGET_RUNTIME, SETTLED, cellProps, fromApprovals, gatekeeper } from "./host";
+import {
+  type ApprovalStatus,
+  GADGET_RUNTIME,
+  SETTLED,
+  type TokenUsage,
+  cellProps,
+  fromApprovals,
+  gatekeeper,
+} from "./host";
 import { CALLER_HEADER, CELL_HEADER, sha256Hex, text } from "./http";
 import type { Caller } from "./identity";
 import type { Owner, ShareRole } from "./workspace";
@@ -15,6 +23,34 @@ interface Gadget {
   onAlarm(): Promise<void>;
   // Defined by the gadget runtime; calls the gadget's onApproval.
   __kodoApprovalSettled(status: ApprovalStatus): Promise<void>;
+  // Defined by the gadget runtime: the size of the gadget's database.
+  __kodoStorageBytes(): Promise<number>;
+}
+
+// Tokens used through one granted model.
+export interface ModelUsage {
+  calls: number;
+  input: number;
+  output: number;
+  total: number;
+}
+
+// What a cell did in one calendar month (UTC).
+export interface MonthUsage {
+  // HTTP requests and WebSocket messages that reached the gadget.
+  requests: number;
+  // When the last of them arrived, in epoch milliseconds.
+  lastActive: number | null;
+  // Model calls by the granted model's name, e.g. "fast" for
+  // inference:model/fast:invoke.
+  inference: Record<string, ModelUsage>;
+}
+
+export interface CellUsage extends MonthUsage {
+  month: string;
+  // The gadget's database when last measured, or null if it never was (a
+  // gadget that does not extend Gadget cannot be measured).
+  storageBytes: number | null;
 }
 
 // What a cell runs and who may use it, set by its workspace.
@@ -61,6 +97,10 @@ interface ApprovalWatch {
   at: number;
   delay: number;
 }
+// Usage is counted in memory and written a few seconds later, so that a
+// request does not wait for a write of its own.
+const USAGE_FLUSH_MS = 5_000;
+const STORAGE_MEASURE_MS = 2_000;
 const APPROVAL_POLL_FIRST_MS = 2_000;
 const APPROVAL_POLL_MAX_MS = 60_000;
 const MAX_WATCHED_APPROVALS = 100;
@@ -97,6 +137,9 @@ export const CLOSE_GADGET_FAILED = 4011;
 // events to the gadget as calls.
 export class Cell extends DurableObject<Env> {
   private gadget?: Gadget;
+  // Usage not yet written, by month.
+  private pending = new Map<string, MonthUsage>();
+  private flushing: number | null = null;
 
   // Called by the workspace to create the cell or move it to another version.
   async bind(binding: CellBinding): Promise<void> {
@@ -133,8 +176,38 @@ export class Cell extends DurableObject<Env> {
     };
   }
 
+  // Called by the kernel's host binding with what one of this cell's model
+  // calls used.
+  async recordUsage(capability: string, usage: TokenUsage): Promise<void> {
+    const model = modelName(capability);
+    if (!model) return;
+    const month = this.counting();
+    const m = (month.inference[model] ??= { calls: 0, input: 0, output: 0, total: 0 });
+    m.calls++;
+    m.input += count(usage?.input);
+    m.output += count(usage?.output);
+    m.total += count(usage?.total) || count(usage?.input) + count(usage?.output);
+  }
+
+  // What the cell did in a month (YYYY-MM, UTC), for the workspace's usage
+  // report.
+  async usage(month: string): Promise<CellUsage> {
+    this.writeUsage();
+    const stored = this.ctx.storage.kv.get<MonthUsage>(`usage:${month}`);
+    return {
+      month,
+      requests: stored?.requests ?? 0,
+      lastActive: stored?.lastActive ?? null,
+      inference: stored?.inference ?? {},
+      storageBytes: this.ctx.storage.kv.get<number>("storage-bytes") ?? null,
+    };
+  }
+
   // Called by the workspace to delete the cell and its gadget's storage.
   async unbind(): Promise<void> {
+    this.pending.clear();
+    clearTimeout(this.flushing);
+    this.flushing = null;
     this.restart();
     this.ctx.facets.delete("gadget");
     for (const ws of this.ctx.getWebSockets()) ws.close(1000, "cell deleted");
@@ -187,6 +260,7 @@ export class Cell extends DurableObject<Env> {
     if (caller.role === "viewer" && (upgrade || !READ_METHODS.has(request.method))) {
       return text(403, "viewers can only read this cell");
     }
+    this.counting().requests++;
     try {
       if (upgrade) {
         await this.load(cell);
@@ -208,6 +282,7 @@ export class Cell extends DurableObject<Env> {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     const { cell, socket, caller } = ws.deserializeAttachment() as SocketAttachment;
+    this.counting().requests++;
     try {
       const reply = await this.call(cell, (gadget) => gadget.onMessage(socket, message, caller));
       if (typeof reply === "string" || reply instanceof ArrayBuffer) ws.send(reply);
@@ -311,6 +386,57 @@ export class Cell extends DurableObject<Env> {
     if (existing !== null && kv.get("gadget-alarm") === undefined) kv.put("gadget-alarm", existing);
   }
 
+  // This month's unwritten usage, which the caller adds to. The cell writes
+  // it a few seconds later and measures the gadget's database then.
+  private counting(): MonthUsage {
+    const now = Date.now();
+    const month = new Date(now).toISOString().slice(0, 7);
+    let usage = this.pending.get(month);
+    if (!usage) this.pending.set(month, (usage = { requests: 0, lastActive: null, inference: {} }));
+    usage.lastActive = now;
+    this.flushing ??= setTimeout(() => {
+      this.flushing = null;
+      this.writeUsage();
+      this.measureStorage().catch(() => {});
+    }, USAGE_FLUSH_MS);
+    return usage;
+  }
+
+  // Adds the unwritten usage to what is stored.
+  private writeUsage(): void {
+    const kv = this.ctx.storage.kv;
+    for (const [month, add] of this.pending) {
+      const key = `usage:${month}`;
+      const stored = kv.get<MonthUsage>(key) ?? { requests: 0, lastActive: null, inference: {} };
+      stored.requests += add.requests;
+      stored.lastActive = Math.max(stored.lastActive ?? 0, add.lastActive ?? 0) || null;
+      for (const [model, u] of Object.entries(add.inference)) {
+        const m = (stored.inference[model] ??= { calls: 0, input: 0, output: 0, total: 0 });
+        m.calls += u.calls;
+        m.input += u.input;
+        m.output += u.output;
+        m.total += u.total;
+      }
+      kv.put(key, stored);
+    }
+    this.pending.clear();
+  }
+
+  // Records the size of the gadget's database, if the gadget is running and
+  // can say. Never loads the gadget.
+  private async measureStorage(): Promise<void> {
+    const gadget = this.gadget;
+    if (!gadget) return;
+    let timer: number | null = null;
+    const bytes = await Promise.race([
+      gadget.__kodoStorageBytes(),
+      new Promise<undefined>((resolve) => (timer = setTimeout(resolve, STORAGE_MEASURE_MS))),
+    ]).finally(() => clearTimeout(timer));
+    if (typeof bytes === "number" && Number.isFinite(bytes) && this.binding()) {
+      this.ctx.storage.kv.put("storage-bytes", bytes);
+    }
+  }
+
   private acceptSocket(cell: string, caller: GadgetCaller): Response {
     const [server, client] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server);
@@ -392,6 +518,14 @@ export class Cell extends DurableObject<Env> {
     }
   }
 }
+
+// The model a capability names: "fast" for inference:model/fast:invoke.
+function modelName(capability: string): string | null {
+  const m = /^inference:model\/([^:/]+):invoke$/.exec(capability);
+  return m ? m[1] : null;
+}
+
+const count = (n: unknown): number => (typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.floor(n) : 0);
 
 // The caller's role on the cell, or null if it is not theirs and not shared
 // with them. The admin token acts as the owner.

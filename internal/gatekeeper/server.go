@@ -48,6 +48,9 @@ type Answer struct {
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers"`
 	Body    []byte            `json:"body,omitempty"`
+	// What the call consumed, for a metered provider. The kernel counts it
+	// for the cell; the gadget does not see it.
+	Usage *Usage `json:"usage,omitempty"`
 }
 
 // DecisionHeader tells the gadget whether a response is the upstream's
@@ -162,33 +165,46 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	waits, _ := SideEffecting(c)
-	if !waits && len(call.Request.Body) > 0 {
+	if c.Verb == "read" && len(call.Request.Body) > 0 {
 		deny("read calls take no body")
 		return
 	}
 	rec.Provider = c.Provider
-	conn, err := s.Tokens.Connection(ctx, call.Owner.User, c.Provider)
-	if err != nil {
-		reason := "the cell's owner has not connected " + c.Provider
-		if !errors.Is(err, ErrNotConnected) {
-			s.log().Error("reading connection", "provider", c.Provider, "err", err)
-			reason = "the owner's " + c.Provider + " connection is unavailable"
-		}
-		deny(reason)
+	platform, isPlatform := provider.(PlatformProvider)
+	if isPlatform && waits {
+		deny(c.Provider + " has no calls that wait for approval")
 		return
 	}
-	upstream, err := provider.Prepare(ctx, c, call.Request, conn.Account)
+	// A platform provider's calls use the platform's credentials; any other
+	// provider's use the owner's.
+	var account string
+	if !isPlatform {
+		conn, err := s.Tokens.Connection(ctx, call.Owner.User, c.Provider)
+		if err != nil {
+			reason := "the cell's owner has not connected " + c.Provider
+			if !errors.Is(err, ErrNotConnected) {
+				s.log().Error("reading connection", "provider", c.Provider, "err", err)
+				reason = "the owner's " + c.Provider + " connection is unavailable"
+			}
+			deny(reason)
+			return
+		}
+		account = conn.Account
+	}
+	upstream, err := provider.Prepare(ctx, c, call.Request, account)
 	if err != nil {
 		deny(err.Error())
 		return
 	}
 	if waits {
-		s.queue(w, r, call, fleet, provider, c, conn.Account, rec)
+		s.queue(w, r, call, fleet, provider, c, account, rec)
 		return
 	}
 
-	token, err := s.Tokens.Token(ctx, call.Owner.User, c.Provider)
-	if err != nil {
+	var token string
+	if isPlatform {
+		platform.Attribute(upstream, fleet, call)
+	} else if token, err = s.Tokens.Token(ctx, call.Owner.User, c.Provider); err != nil {
 		s.log().Error("reading token", "provider", c.Provider, "err", err)
 		deny("the owner's " + c.Provider + " token is unavailable")
 		return
@@ -204,6 +220,12 @@ func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
 	answer, err := s.send(upstream, provider, rec)
 	if err != nil {
 		answer = failure(http.StatusBadGateway, err.Error())
+	} else if m, ok := provider.(Metering); ok {
+		// What the call consumed is recorded once it is known, and goes back
+		// to the kernel, which counts it for the cell.
+		answer.Usage = m.Meter(&answer)
+		rec.Decision, rec.Status, rec.Usage = Metered, answer.Status, answer.Usage
+		s.record(ctx, rec)
 	}
 	writeAnswer(w, answer)
 }
@@ -308,7 +330,13 @@ func (s *Server) queryApprovals(w http.ResponseWriter, r *http.Request) {
 // the provider.
 func (s *Server) send(req *http.Request, p Provider, rec Record) (Answer, error) {
 	started := s.now()
-	res, err := s.Upstream.Do(req)
+	timeout := DefaultCallTimeout
+	if t, ok := p.(TimeLimited); ok {
+		timeout = t.CallTimeout()
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), timeout)
+	defer cancel()
+	res, err := s.Upstream.Do(req.WithContext(ctx))
 	if err != nil {
 		s.log().Warn("upstream call failed", "cell", rec.Cell, "grant", rec.Grant, "err", err)
 		return Answer{}, errors.New(rec.Provider + " is unreachable")
@@ -341,6 +369,12 @@ func (s *Server) record(ctx context.Context, rec Record) bool {
 		// Logged with its upstream status once the call returns.
 	case Connected, Disconnected:
 		s.log().Info("connection", "decision", rec.Decision, "provider", rec.Provider)
+	case Metered:
+		if rec.Usage != nil {
+			s.log().Info("usage", "fleet", rec.Fleet, "workspace", rec.Workspace, "blueprint", rec.Blueprint,
+				"cell", rec.Cell, "grant", rec.Grant, "status", rec.Status, "model", rec.Usage.Model,
+				"input", rec.Usage.Input, "output", rec.Usage.Output)
+		}
 	default:
 		s.log().Info("call", "decision", rec.Decision, "reason", rec.Reason, "fleet", rec.Fleet,
 			"workspace", rec.Workspace, "blueprint", rec.Blueprint, "cell", rec.Cell, "grant", rec.Grant,
@@ -440,6 +474,9 @@ func (s *Server) listConnections(w http.ResponseWriter, r *http.Request, u User)
 	}
 	providers := make([]providerInfo, 0, len(s.Providers))
 	for name, p := range s.Providers {
+		if _, ok := p.(PlatformProvider); ok {
+			continue
+		}
 		info := providerInfo{Name: name}
 		if c, ok := p.(AccountChooser); ok {
 			info.Account = c.AccountPrompt()
@@ -453,8 +490,8 @@ func (s *Server) listConnections(w http.ResponseWriter, r *http.Request, u User)
 func (s *Server) connect(w http.ResponseWriter, r *http.Request, u User) {
 	name := r.PathValue("provider")
 	p, ok := s.Providers[name]
-	if !ok {
-		jsonError(w, http.StatusNotFound, "no provider "+name)
+	if _, platform := p.(PlatformProvider); !ok || platform {
+		jsonError(w, http.StatusNotFound, "no provider to connect named "+name)
 		return
 	}
 	var body struct {

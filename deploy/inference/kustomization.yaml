@@ -1,0 +1,13 @@
+# The inference gateway for hiddenfield.dev: Envoy AI Gateway in front of
+# OpenRouter and an in-cluster simulator, with budgets per user and
+# workspace. Needs deploy/platform and the AI Gateway controller; task
+# k3s:inference installs both and creates the Secrets openrouter and
+# kodo-inference-clients first.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - gateway.yaml
+  - models.yaml
+  - budgets.yaml
+  - simulator.yaml

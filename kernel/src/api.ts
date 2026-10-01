@@ -18,6 +18,7 @@ import { covers, isCapability, isDigest, isGrant, isName, isVersion } from "./na
 //   PUT    /api/blueprints/:name/:version             {bundle, capabilities?, tier?}
 //   PUT    /api/workspaces/:ws                        {quota}
 //   GET    /api/workspaces/:ws
+//   GET    /api/workspaces/:ws/usage?month=YYYY-MM
 //   GET    /api/workspaces/:ws/cells
 //   POST   /api/workspaces/:ws/cells                  {blueprint, version?}
 //   GET    /api/workspaces/:ws/cells/:id
@@ -98,6 +99,12 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
     const info = await ws.info();
     if (!info) throw new ApiError(404, `workspace ${a} does not exist`);
     if (b === undefined && method === "GET") return json(200, info);
+    if (b === "usage" && c === undefined && method === "GET") {
+      // The admin token sees every cell; a user sees the cells they own.
+      const month = new URL(request.url).searchParams.get("month") ?? new Date().toISOString().slice(0, 7);
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new ApiError(400, "month must be YYYY-MM");
+      return json(200, await ws.usage(month, caller.kind === "admin" ? undefined : caller.user));
+    }
     if (b === "cells" && c === undefined && method === "GET") {
       const cells = (await ws.listCells()).filter((cell) => canSee(caller, cell));
       return json(200, { cells });

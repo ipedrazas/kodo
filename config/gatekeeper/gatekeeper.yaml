@@ -7,6 +7,8 @@
 #                                     a bucket no fleet can read
 #   Secret kodo-gatekeeper-openbao    OPENBAO_ADDR, OPENBAO_ROLE_ID and
 #                                     OPENBAO_SECRET_ID, from deploy/openbao/setup.sh
+#   Secret kodo-gatekeeper-inference  optional: "key", the key the inference
+#                                     gateway (INFERENCE_URL) requires
 # The operator writes Secret kodo-gatekeeper-fleets, one key per Fleet that
 # names this Gatekeeper; it is mounted, so new fleets are trusted without a
 # restart once the kubelet refreshes the mount.
@@ -74,6 +76,9 @@ spec:
               value: /etc/kodo/openbao/OPENBAO_SECRET_ID
             - name: GATEKEEPER_TRUST_DIR
               value: /etc/kodo/fleets
+            # Read at start; without the Secret there is no key to send.
+            - name: INFERENCE_KEY_FILE
+              value: /etc/kodo/inference/key
           ports:
             - name: public
               containerPort: 8080
@@ -107,6 +112,9 @@ spec:
             - name: openbao
               mountPath: /etc/kodo/openbao
               readOnly: true
+            - name: inference
+              mountPath: /etc/kodo/inference
+              readOnly: true
       volumes:
         - name: fleets
           secret:
@@ -119,6 +127,10 @@ spec:
             items:
               - key: OPENBAO_SECRET_ID
                 path: OPENBAO_SECRET_ID
+        - name: inference
+          secret:
+            secretName: kodo-gatekeeper-inference
+            optional: true
 ---
 apiVersion: v1
 kind: Service

@@ -25,6 +25,8 @@ const (
 	Executed = "executed"
 	Failed   = "failed"
 	Expired  = "expired"
+	// What a metered call (a model call) consumed, once it answered.
+	Metered = "metered"
 )
 
 // Record is one audit entry: who called what, under which grant, and what
@@ -46,8 +48,10 @@ type Record struct {
 	Path      string    `json:"path,omitempty"`
 	Provider  string    `json:"provider,omitempty"`
 	Approval  string    `json:"approval,omitempty"`
-	// The upstream status of an executed call.
+	// The upstream status of an executed or metered call.
 	Status int `json:"status,omitempty"`
+	// What a metered call consumed.
+	Usage *Usage `json:"usage,omitempty"`
 }
 
 // Audit appends records to audit/<yyyy>/<mm>/<dd>/ in the store, one object
