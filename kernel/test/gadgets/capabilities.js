@@ -7,7 +7,30 @@ import { Gadget } from "kodo";
 //                            calls the host directly for C, binding or not
 //   /forge?cell=X&cap=C      calls the host with made-up props for cell X
 //   /burst?cap=C&n=N         N concurrent calls on the binding for C
+//   /send?cap=C              POSTs the request body on the binding for C
+//   /approval?id=I           this.approval(I)
+//   /settled                 every approval onApproval has been called with
+//   /alarm?in=MS             sets the gadget's alarm; /alarmed counts its runs
+const view = async (a) => ({
+  id: a.id,
+  state: a.state,
+  capability: a.capability,
+  reason: a.reason,
+  decided: a.decidedAt instanceof Date,
+  status: a.response?.status ?? null,
+  body: a.response ? await a.response.text() : null,
+});
+
 export class App extends Gadget {
+  async onApproval(approval) {
+    const settled = this.ctx.storage.kv.get("settled") ?? [];
+    this.ctx.storage.kv.put("settled", [...settled, await view(approval)]);
+  }
+
+  async onAlarm() {
+    this.ctx.storage.kv.put("alarmed", (this.ctx.storage.kv.get("alarmed") ?? 0) + 1);
+  }
+
   async fetch(request) {
     const url = new URL(request.url);
     const cap = url.searchParams.get("cap");
@@ -19,6 +42,22 @@ export class App extends Gadget {
       const res = await grant.fetch(path, { headers: { accept: "application/json" } });
       return Response.json({ binding: true, status: res.status, body: await res.text() });
     }
+    if (url.pathname === "/send") {
+      const res = await this.grants[cap].fetch(path, { method: "POST", body: await request.text() });
+      return Response.json({
+        status: res.status,
+        decision: res.headers.get("x-kodo-decision"),
+        approval: res.headers.get("x-kodo-approval"),
+        body: await res.json(),
+      });
+    }
+    if (url.pathname === "/approval") return Response.json(await view(await this.approval(url.searchParams.get("id"))));
+    if (url.pathname === "/settled") return Response.json(this.ctx.storage.kv.get("settled") ?? []);
+    if (url.pathname === "/alarm") {
+      await this.setAlarm(Date.now() + Number(url.searchParams.get("in")));
+      return Response.json({ ok: true });
+    }
+    if (url.pathname === "/alarmed") return Response.json(this.ctx.storage.kv.get("alarmed") ?? 0);
     if (url.pathname === "/burst") {
       const n = Number(url.searchParams.get("n") ?? 3);
       const statuses = await Promise.all(Array.from({ length: n }, () => this.grants[cap].fetch(path).then((r) => r.status)));

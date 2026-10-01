@@ -63,22 +63,40 @@ func (t Tokens) Put(ctx context.Context, user, provider, account, token string) 
 
 // Token decrypts a user's token for a provider.
 func (t Tokens) Token(ctx context.Context, user, provider string) (string, error) {
+	_, token, err := t.Credential(ctx, user, provider)
+	return token, err
+}
+
+// Connection returns a user's connection to a provider, without decrypting
+// its token.
+func (t Tokens) Connection(ctx context.Context, user, provider string) (Connection, error) {
 	data, err := t.Store.Get(ctx, tokenKey(user, provider))
 	if errors.Is(err, ErrNotFound) {
-		return "", ErrNotConnected
+		return Connection{}, ErrNotConnected
 	}
 	if err != nil {
-		return "", err
+		return Connection{}, err
 	}
 	var c Connection
 	if err := json.Unmarshal(data, &c); err != nil {
-		return "", err
+		return Connection{}, err
+	}
+	return c, nil
+}
+
+// Credential returns a user's connection to a provider and its decrypted
+// token.
+func (t Tokens) Credential(ctx context.Context, user, provider string) (Connection, string, error) {
+	c, err := t.Connection(ctx, user, provider)
+	if err != nil {
+		return Connection{}, "", err
 	}
 	plain, err := t.Vault.Decrypt(ctx, encryptionContext(user, provider), c.Ciphertext)
 	if err != nil {
-		return "", fmt.Errorf("decrypting the token: %w", err)
+		return Connection{}, "", fmt.Errorf("decrypting the token: %w", err)
 	}
-	return string(plain), nil
+	c.Ciphertext = ""
+	return c, string(plain), nil
 }
 
 func (t Tokens) Delete(ctx context.Context, user, provider string) error {

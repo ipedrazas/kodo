@@ -15,7 +15,6 @@ import (
 // repo/<owner>/<repo>, and one verb, read: GET and HEAD on the repository's
 // REST API, https://api.github.com/repos/<owner>/<repo>[/...]. A gadget names
 // the path relative to the repository, so a grant cannot reach another one.
-// Writes wait for the approval queue.
 type GitHub struct {
 	// APIURL is the REST API's base URL; https://api.github.com if empty.
 	APIURL string
@@ -37,7 +36,7 @@ func (g GitHub) base() string {
 	return strings.TrimSuffix(g.APIURL, "/")
 }
 
-func (g GitHub) Prepare(ctx context.Context, c Capability, r CallRequest) (*http.Request, error) {
+func (g GitHub) Prepare(ctx context.Context, c Capability, r CallRequest, _ string) (*http.Request, error) {
 	m := githubRepo.FindStringSubmatch(c.Resource)
 	if m == nil {
 		return nil, fmt.Errorf("github has no resource %q; use repo/<owner>/<repo>", c.Resource)
@@ -80,7 +79,7 @@ func (g GitHub) Authorize(req *http.Request, token string) {
 	req.Header.Set("Authorization", "Bearer "+token)
 }
 
-func (g GitHub) Account(ctx context.Context, token string) (string, error) {
+func (g GitHub) Account(ctx context.Context, token, _ string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.base()+"/user", nil)
 	if err != nil {
 		return "", err
@@ -107,6 +106,14 @@ func (g GitHub) Account(ctx context.Context, token string) (string, error) {
 		return "", errors.New("github returned no account for the token")
 	}
 	return user.Login, nil
+}
+
+func (g GitHub) Describe(c Capability, r CallRequest, account string) Summary {
+	return Summary{
+		Title:  r.Method + " " + c.Resource + r.Path + " on GitHub",
+		Fields: []Field{{"Account", account}},
+		Body:   string(r.Body),
+	}
 }
 
 func (g GitHub) ResponseHeaders() []string {

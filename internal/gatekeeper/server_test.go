@@ -63,10 +63,11 @@ type harness struct {
 	internal *httptest.Server
 	public   *httptest.Server
 	upstream []string // requests GitHub received, "METHOD path auth"
+	resend   *fakeResend
 }
 
 func newHarness(t *testing.T) *harness {
-	h := &harness{t: t, store: NewMemStore()}
+	h := &harness{t: t, store: NewMemStore(), resend: newFakeResend(t)}
 	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.upstream = append(h.upstream, r.Method+" "+r.URL.RequestURI()+" "+r.Header.Get("Authorization"))
 		if r.Header.Get("Authorization") != "Bearer "+testToken {
@@ -92,10 +93,14 @@ func newHarness(t *testing.T) *harness {
 		Trust:     Trust{Dir: dir},
 		Tokens:    Tokens{Store: h.store, Vault: fakeVault{}},
 		Audit:     Audit{Store: h.store},
-		Providers: map[string]Provider{"github": GitHub{APIURL: github.URL}},
-		Users:     fakeUsers{"alice-token": {Sub: alice, Email: "alice@test"}},
-		Upstream:  NoRedirects(5 * time.Second),
-		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Approvals: Approvals{Store: h.store},
+		Providers: map[string]Provider{"github": GitHub{APIURL: github.URL}, "email": Email{APIURL: h.resend.URL}},
+		Users: fakeUsers{
+			"alice-token": {Sub: alice, Email: "alice@test"},
+			"bob-token":   {Sub: "sub-bob", Email: "bob@test"},
+		},
+		Upstream: NoRedirects(5 * time.Second),
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	h.internal = httptest.NewServer(h.srv.Internal())
 	h.public = httptest.NewServer(h.srv.Public())
@@ -265,14 +270,14 @@ func TestUntrustedCallsAreRejected(t *testing.T) {
 			t.Errorf("%s: %d", name, status)
 		}
 	}
-	rejected := 0
+	untrusted := 0
 	for _, r := range h.audit() {
-		if r.Decision == Rejected {
-			rejected++
+		if r.Decision == Untrusted {
+			untrusted++
 		}
 	}
-	if rejected != 5 {
-		t.Errorf("%d rejections recorded, want 5", rejected)
+	if untrusted != 5 {
+		t.Errorf("%d untrusted calls recorded, want 5", untrusted)
 	}
 	if len(h.upstream) != 1 { // only the /user check when connecting
 		t.Errorf("untrusted calls reached GitHub: %v", h.upstream)
@@ -344,7 +349,7 @@ func TestConnectionsAPI(t *testing.T) {
 	if _, err := h.srv.Tokens.Token(context.Background(), alice, "github"); !errors.Is(err, ErrNotConnected) {
 		t.Errorf("token still there: %v", err)
 	}
-	if status, body := do("GET", "/gatekeeper/", "", ""); status != http.StatusOK || !strings.Contains(body, "<title>kodo connections") {
+	if status, body := do("GET", "/gatekeeper/", "", ""); status != http.StatusOK || !strings.Contains(body, "<title>kodo approvals and connections") {
 		t.Errorf("page: %d", status)
 	}
 }

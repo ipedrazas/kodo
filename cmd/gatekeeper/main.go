@@ -23,6 +23,11 @@
 //	OPENBAO_ROLE              kubernetes
 //	OPENBAO_TOKEN             token (development only)
 //	GITHUB_API_URL            default https://api.github.com
+//	RESEND_API_URL            the email provider's API; default https://api.resend.com
+//	GATEKEEPER_APPROVAL_TTL   how long a call waits for approval (default 168h)
+//	GATEKEEPER_APPROVAL_STALE how long an approval may be executing before it
+//	                          is reported failed (default 1m; keep it well above
+//	                          the 15 s upstream timeout)
 package main
 
 import (
@@ -79,15 +84,28 @@ func run(log *slog.Logger) error {
 		log.Warn("OIDC_ISSUER is not set: users cannot connect accounts")
 	}
 
-	github := gatekeeper.GitHub{APIURL: os.Getenv("GITHUB_API_URL"), HTTP: &http.Client{Timeout: 15 * time.Second}}
+	ttl, err := duration("GATEKEEPER_APPROVAL_TTL", gatekeeper.DefaultApprovalTTL)
+	if err != nil {
+		return err
+	}
+	stale, err := duration("GATEKEEPER_APPROVAL_STALE", gatekeeper.DefaultApprovalStale)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
 	srv := &gatekeeper.Server{
 		Trust:     gatekeeper.Trust{Dir: env("GATEKEEPER_TRUST_DIR", "/etc/kodo/fleets")},
 		Tokens:    gatekeeper.Tokens{Store: store, Vault: transit},
 		Audit:     gatekeeper.Audit{Store: store},
-		Providers: map[string]gatekeeper.Provider{"github": github},
-		Users:     users,
-		Upstream:  gatekeeper.NoRedirects(15 * time.Second),
-		Log:       log,
+		Approvals: gatekeeper.Approvals{Store: store, TTL: ttl, Stale: stale},
+		Providers: map[string]gatekeeper.Provider{
+			"github": gatekeeper.GitHub{APIURL: os.Getenv("GITHUB_API_URL"), HTTP: client},
+			"email":  gatekeeper.Email{APIURL: os.Getenv("RESEND_API_URL"), HTTP: client},
+		},
+		Users:    users,
+		Upstream: gatekeeper.NoRedirects(15 * time.Second),
+		Log:      log,
 	}
 
 	var allow []string
@@ -108,7 +126,8 @@ func run(log *slog.Logger) error {
 		go func() { errs <- s.ListenAndServe() }()
 	}
 	log.Info("gatekeeper serving", "version", version.String(), "public", servers[0].Addr, "internal", servers[1].Addr,
-		"egress", servers[2].Addr, "egress_allow", allow, "bucket", bucket, "openbao", transit.Addr)
+		"egress", servers[2].Addr, "egress_allow", allow, "bucket", bucket, "openbao", transit.Addr,
+		"approval_ttl", ttl.String(), "approval_stale", stale.String())
 
 	select {
 	case err := <-errs:
@@ -159,6 +178,18 @@ func openBao() (*vault.Transit, error) {
 		return nil, fmt.Errorf("unknown OPENBAO_AUTH %q", method)
 	}
 	return t, nil
+}
+
+func duration(name string, def time.Duration) (time.Duration, error) {
+	v := os.Getenv(name)
+	if v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s: %q is not a positive duration", name, v)
+	}
+	return d, nil
 }
 
 func env(name, def string) string {

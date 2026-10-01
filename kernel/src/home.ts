@@ -24,7 +24,7 @@ export const HOME_PAGE = `<!doctype html>
 <body>
 <header>
   <h1>kodo</h1>
-  <span><span id="who" class="muted"></span> · <a href="/logout">Log out</a></span>
+  <span><span id="who" class="muted"></span> · <a href="/gatekeeper/" id="approvals">Approvals and connections</a> · <a href="/logout">Log out</a></span>
 </header>
 <p id="error" role="alert"></p>
 
@@ -111,6 +111,20 @@ async function loadCells() {
   }
 }
 
+// Calls waiting for the user's approval, from the Gatekeeper, if this
+// deployment has one.
+async function loadApprovals() {
+  try {
+    const res = await fetch("/gatekeeper/api/approvals?state=pending");
+    if (!res.ok) return;
+    const n = (await res.json()).approvals.length;
+    $("approvals").textContent = n ? n + " waiting for approval" : "Approvals and connections";
+    $("approvals").style.fontWeight = n ? "600" : "";
+  } catch {
+    // No Gatekeeper.
+  }
+}
+
 $("workspace-form").onsubmit = (ev) => { ev.preventDefault(); loadCells(); };
 $("create-form").onsubmit = async (ev) => {
   ev.preventDefault();
@@ -128,6 +142,7 @@ $("create-form").onsubmit = async (ev) => {
     for (const name of blueprints) $("blueprint").append(el("option", name));
     $("workspace").value = localStorage.getItem("kodo.workspace") || "team";
     loadCells();
+    loadApprovals();
   } catch (err) { show(err); }
 })();
 </script>

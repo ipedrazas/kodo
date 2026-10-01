@@ -12,15 +12,24 @@ import (
 
 // Decisions recorded in the audit log.
 const (
-	Allowed      = "allowed"
-	Denied       = "denied"
-	Rejected     = "rejected" // the call did not come from a trusted fleet
+	Allowed      = "allowed"   // a read, made at once
+	Denied       = "denied"    // outside the cell's grants, or not possible
+	Untrusted    = "untrusted" // the call did not come from a trusted fleet
 	Connected    = "connected"
 	Disconnected = "disconnected"
+	// A side-effecting call through the approval queue: queued, then
+	// approved and executed or failed, or rejected, or expired.
+	Queued   = "queued"
+	Approved = "approved"
+	Rejected = "rejected"
+	Executed = "executed"
+	Failed   = "failed"
+	Expired  = "expired"
 )
 
 // Record is one audit entry: who called what, under which grant, and what
-// the Gatekeeper decided.
+// the Gatekeeper decided. For an approval, User is whoever acted on it: the
+// owner who approved or rejected it, or the owner whose call was queued.
 type Record struct {
 	Time      time.Time `json:"time"`
 	Decision  string    `json:"decision"`
@@ -36,6 +45,9 @@ type Record struct {
 	Method    string    `json:"method,omitempty"`
 	Path      string    `json:"path,omitempty"`
 	Provider  string    `json:"provider,omitempty"`
+	Approval  string    `json:"approval,omitempty"`
+	// The upstream status of an executed call.
+	Status int `json:"status,omitempty"`
 }
 
 // Audit appends records to audit/<yyyy>/<mm>/<dd>/ in the store, one object
