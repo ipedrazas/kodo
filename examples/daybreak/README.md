@@ -40,7 +40,8 @@ You need a fleet (on hiddenfield.dev: `task k3s:up`), a workspace and a login. T
 kubectl -n kodo apply -k examples/daybreak
 kubectl -n kodo wait blueprint/daybreak-1.0.1 --for=condition=Published
 
-# As alice: create the circle and share it with bob.
+# As alice: create the circle and share it with bob (or do both on https://app.hiddenfield.dev/;
+# the circle's page links its owner there to invite friends).
 curl -b jar -H "Origin: https://app.hiddenfield.dev" -H 'content-type: application/json' \
   -d '{"blueprint":"daybreak"}' https://app.hiddenfield.dev/api/workspaces/team/cells
 curl -b jar -X PUT -H "Origin: https://app.hiddenfield.dev" -H 'content-type: application/json' \
