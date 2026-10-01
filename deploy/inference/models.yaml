@@ -4,7 +4,7 @@
 # that model with no change to any of them.
 #
 #   default   OpenRouter, meta-llama/llama-3.1-8b-instruct
-#   sim       the in-cluster simulator (free; answers with the prompt)
+#   sim       the in-cluster simulator (free; answers with random text)
 #
 # A backend sees x-kodo-user (the owner's subject at the identity provider),
 # x-kodo-workspace and x-kodo-blueprint. Envoy charges the budgets in

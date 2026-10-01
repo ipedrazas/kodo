@@ -47,12 +47,17 @@ ok "$(api alice PUT "/workspaces/team/cells/$daybreak/shares/bob@$DOMAIN" '{"rol
 members=$(ok "$(gadget bob "$daybreak" GET /api/state)" 200 "bob opening the circle" | json '[m["email"] for m in d["members"]]')
 echo "circle $daybreak shared with bob; members after his first visit: $members"
 at() { python3 -c "import datetime as t; d = t.datetime.now(t.timezone.utc) + t.timedelta(days=2); print(int(d.replace(hour=$1, minute=0, second=0, microsecond=0).timestamp() * 1000))"; }
-ok "$(gadget alice "$daybreak" POST /api/slots "{\"start\":$(at 17),\"end\":$(at 21)}")" 200 "alice's free time" >/dev/null
-state=$(ok "$(gadget bob "$daybreak" POST /api/slots "{\"start\":$(at 19),\"end\":$(at 23)}")" 200 "bob's free time")
+# JSON bodies are built first: bash 3.2 brace-expands them inside $(...).
+free() { printf '{"start":%s,"end":%s}' "$(at "$1")" "$(at "$2")"; }
+body=$(free 17 21)
+ok "$(gadget alice "$daybreak" POST /api/slots "$body")" 200 "alice's free time" >/dev/null
+body=$(free 19 23)
+state=$(ok "$(gadget bob "$daybreak" POST /api/slots "$body")" 200 "bob's free time")
 [[ $(json '[(w["with"], w["start"], w["end"]) for w in d["windows"]]' <<<"$state") == "[('alice@$DOMAIN', $(at 19), $(at 21))]" ]] ||
   fail "bob's shared windows: $state"
 echo "alice free 17:00-21:00, bob 19:00-23:00 (UTC, in two days): bob sees 19:00-21:00 free together"
-state=$(ok "$(gadget bob "$daybreak" POST /api/meetings "{\"with\":\"alice@$DOMAIN\",\"start\":$(at 19),\"end\":$(at 20),\"title\":\"kodo e2e dinner\"}")" 200 "proposing")
+body=$(printf '{"with":"alice@%s","start":%s,"end":%s,"title":"kodo e2e dinner"}' "$DOMAIN" "$(at 19)" "$(at 20)")
+state=$(ok "$(gadget bob "$daybreak" POST /api/meetings "$body")" 200 "proposing")
 meeting=$(json 'd["meetings"][0]["id"]' <<<"$state")
 [[ $(gadget bob "$daybreak" POST "/api/meetings/$meeting/accept" | tail -1) == 403 ]] || fail "bob accepted his own proposal"
 state=$(ok "$(gadget alice "$daybreak" POST "/api/meetings/$meeting/accept")" 200 "accepting")
@@ -71,7 +76,8 @@ echo "cancelled; the hour is free again for both"
 step "HN Reader: Hacker News through a web grant, summarised by a model"
 reader=$(ok "$(api alice POST /workspaces/team/cells '{"blueprint":"hn-reader"}')" 201 "creating the reader" | json 'd["id"]')
 [[ $(gadget alice "$reader" GET /api/stories | tail -1) == 403 ]] || fail "the reader read without a grant"
-ok "$(api alice PUT "/workspaces/team/cells/$reader/grants" "{\"grants\":[\"web:hn.algolia.com/api/v1:read\",\"inference:model/$MODEL:invoke\"]}")" 200 "granting" >/dev/null
+body=$(printf '{"grants":["web:hn.algolia.com/api/v1:read","inference:model/%s:invoke"]}' "$MODEL")
+ok "$(api alice PUT "/workspaces/team/cells/$reader/grants" "$body")" 200 "granting" >/dev/null
 front=$(ok "$(gadget alice "$reader" GET '/api/stories?list=front')" 200 "the front page")
 n=$(json 'len(d["stories"])' <<<"$front")
 ((n >= 10)) || fail "the front page has $n stories"
