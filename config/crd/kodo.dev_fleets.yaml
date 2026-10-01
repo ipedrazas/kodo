@@ -105,8 +105,8 @@ spec:
                 description: |-
                   Egress, when set, denies the nodes every outbound connection except
                   DNS, the fleet's own nodes, the Gatekeeper and the destinations listed
-                  in it: the bucket endpoint, the identity provider's keys and, later,
-                  the inference gateway.
+                  in it, such as the bucket endpoint and the identity provider's keys.
+                  Models are reached through the Gatekeeper, never directly.
                 properties:
                   allow:
                     description: Allow are extra egress rules, in NetworkPolicy form.

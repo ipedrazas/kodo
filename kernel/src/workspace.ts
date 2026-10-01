@@ -46,6 +46,9 @@ export interface CellUsageRow extends CellUsage {
   blueprint: string;
   version: string;
   owner: Owner;
+  // Why the cell's usage could not be read, if it could not; it then counts
+  // as nothing.
+  error?: string;
 }
 
 export interface WorkspaceUsage {
@@ -243,8 +246,15 @@ export class Workspace extends DurableObject<Env> {
       while (next < cells.length) {
         const i = next++;
         const c = cells[i];
-        const usage = await this.env.CELL.getByName(c.id).usage(month);
-        rows[i] = { ...usage, id: c.id, blueprint: c.blueprint, version: c.version, owner: c.owner };
+        const row = { id: c.id, blueprint: c.blueprint, version: c.version, owner: c.owner };
+        try {
+          rows[i] = { ...(await this.env.CELL.getByName(c.id).usage(month)), ...row };
+        } catch (err) {
+          // One cell that cannot answer, e.g. still running an older kernel
+          // just after a deploy, does not fail the report.
+          const error = err instanceof Error ? err.message : String(err);
+          rows[i] = { month, requests: 0, lastActive: null, inference: {}, storageBytes: null, ...row, error };
+        }
       }
     };
     await Promise.all(Array.from({ length: Math.min(USAGE_CONCURRENCY, cells.length) }, worker));
