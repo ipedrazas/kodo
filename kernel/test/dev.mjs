@@ -7,7 +7,9 @@
 // tokens for test users, and holds an admin token. With `gatekeeper` set it
 // also plays the Gatekeeper: it checks each call's signature, records it, and
 // answers with `gatekeeper(call)` if that is a function ({status, headers,
-// body}), or else 200 with the call it received as the body.
+// body}), or else 200 with the call it received as the body. Approval
+// queries are answered from `gatekeeper.approvals`, a Map of id to status
+// ({state, ...}) that tests fill in; queries are kept in `queries`.
 import { spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync, randomBytes, sign, timingSafeEqual } from "node:crypto";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -139,6 +141,8 @@ async function startGatekeeper(answer = echo) {
   const key = randomBytes(32).toString("hex");
   const fleet = "test/kodo";
   const calls = [];
+  const queries = [];
+  const approvals = new Map();
   let rejected = 0;
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -149,17 +153,37 @@ async function startGatekeeper(answer = echo) {
       const want = Buffer.from("v1=" + createHmac("sha256", key).update(`${ts}.${body}`).digest("hex"));
       const got = Buffer.from(String(req.headers["x-kodo-signature"] ?? ""));
       const fresh = Math.abs(Date.now() / 1000 - Number(ts)) < 60;
-      if (req.url !== "/v1/calls" || req.headers["x-kodo-fleet"] !== fleet || !fresh ||
-          got.length !== want.length || !timingSafeEqual(got, want)) {
+      if (req.headers["x-kodo-fleet"] !== fleet || !fresh || got.length !== want.length || !timingSafeEqual(got, want)) {
         rejected++;
         res.statusCode = 401;
         res.end("bad signature\n");
         return;
       }
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/v1/approvals/query") {
+        const query = JSON.parse(body);
+        queries.push(query);
+        const answer = query.ids.map((id) => {
+          const a = approvals.get(id);
+          if (!a || a.cell !== query.cell) return { id, state: "unknown" };
+          const { cell, ...status } = a;
+          return {
+            id,
+            ...status,
+            ...(a.result ? { result: { ...a.result, body: Buffer.from(a.result.body ?? "").toString("base64") } } : {}),
+          };
+        });
+        res.end(JSON.stringify({ approvals: answer }));
+        return;
+      }
+      if (req.url !== "/v1/calls") {
+        res.statusCode = 404;
+        res.end("{}");
+        return;
+      }
       const call = JSON.parse(body);
       calls.push(call);
       const a = answer(call);
-      res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({
         status: a.status,
         headers: { "x-kodo-decision": "allowed", ...a.headers },
@@ -173,6 +197,8 @@ async function startGatekeeper(answer = echo) {
     key,
     fleet,
     calls,
+    queries,
+    approvals,
     rejected: () => rejected,
     close: () => server.close(),
   };

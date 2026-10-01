@@ -91,13 +91,28 @@ The Gatekeeper ([`cmd/gatekeeper`](../cmd/gatekeeper/main.go)) runs beside the o
 
 | Port | Who | What |
 | --- | --- | --- |
-| 8080 | Users, through the gateway at `app.<domain>/gatekeeper/` | A page and API to connect and disconnect accounts; checks the user's ID token |
-| 8081 | Fleet nodes only (NetworkPolicy) | `POST /v1/calls`: a kernel's signed capability call |
+| 8080 | Users, through the gateway at `app.<domain>/gatekeeper/` | A page and API to approve or reject queued calls and to connect and disconnect accounts; checks the user's ID token |
+| 8081 | Fleet nodes only (NetworkPolicy) | `POST /v1/calls`: a kernel's signed capability call; `POST /v1/approvals/query`: the state of a cell's approvals |
 | 8082 | Fleet nodes only (NetworkPolicy) | The egress proxy: `CONNECT` to allowed hosts |
 
 It needs a ConfigMap `kodo-gatekeeper` (bucket, OIDC and egress settings), a Secret `kodo-gatekeeper-bucket` with credentials for a bucket no fleet can read, and a Secret `kodo-gatekeeper-openbao` with `OPENBAO_ADDR`, `OPENBAO_ROLE_ID` and `OPENBAO_SECRET_ID` from [`deploy/openbao/setup.sh`](../deploy/openbao/README.md). [`deploy/k3s/gatekeeper`](../deploy/k3s/gatekeeper/kustomization.yaml) is the hiddenfield.dev overlay.
 
-In its bucket it keeps `vault/<user>/<provider>.json` (the OpenBao transit ciphertext of a user's token, bound to that user and provider) and `audit/<yyyy>/<mm>/<dd>/<time>-<id>.json` (one object per decision, created with a conditional write so none is overwritten). A call is recorded before it is made; if the record cannot be written, the call is refused.
+In its bucket it keeps `vault/<user>/<provider>.json` (the OpenBao transit ciphertext of a user's token, bound to that user and provider), `approvals/<user>/<id>.json` (a queued call and what became of it) and `audit/<yyyy>/<mm>/<dd>/<time>-<id>.json` (one object per decision, created with a conditional write so none is overwritten). A call is recorded before it is made; if the record cannot be written, the call is refused.
+
+### Approvals
+
+A call whose verb is `write`, `send` or `delete` is checked against the grant and the owner's connection, then stored as a pending approval and answered `202`. The owner approves or rejects it on the page or with the API:
+
+| Method | Path | |
+| --- | --- | --- |
+| GET | `/gatekeeper/api/approvals[?state=pending]` | The user's 50 most recent approvals, newest first |
+| GET | `/gatekeeper/api/approvals/:id` | One approval |
+| POST | `/gatekeeper/api/approvals/:id/approve` | Runs the call and answers when it has ended: `done` or `failed` |
+| POST | `/gatekeeper/api/approvals/:id/reject` | |
+
+Every state change is a write conditional on the object's ETag (`If-Match`), so of any number of replicas approving at once exactly one moves it from `pending` to `executing` and makes the call; the rest get 409. The approval moves to `done` with the provider's answer, or `failed`. A replica that dies mid-call leaves it `executing`; the first read after `GATEKEEPER_APPROVAL_STALE` (default 1 minute, well beyond the 15 s upstream timeout) moves it to `failed`, and nothing retries it. A pending approval expires after `GATEKEEPER_APPROVAL_TTL` (default 7 days). Calls are sent with `Idempotency-Key: <approval id>` for providers that deduplicate. The audit log records each step: `queued`, `approved` (with the approver), `executed` (with the upstream status), `failed`, `rejected`, `expired`. A call from an untrusted fleet is recorded as `untrusted`.
+
+The `email` provider sends through Resend (`RESEND_API_URL`, default `https://api.resend.com`); each user connects their own API key and the From address, which must be on a domain the key's account has verified (or `onboarding@resend.dev`).
 
 ## How the operator reaches the kernel
 

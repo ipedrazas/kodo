@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { BlueprintVersion } from "./catalog";
 import type { Env } from "./env";
-import { GADGET_RUNTIME, cellProps } from "./host";
+import { type ApprovalStatus, GADGET_RUNTIME, SETTLED, cellProps, fromApprovals, gatekeeper } from "./host";
 import { CALLER_HEADER, CELL_HEADER, sha256Hex, text } from "./http";
 import type { Caller } from "./identity";
 import type { Owner, ShareRole } from "./workspace";
@@ -13,6 +13,8 @@ interface Gadget {
   onMessage(socket: string, message: string | ArrayBuffer, caller: GadgetCaller): Promise<string | ArrayBuffer | undefined>;
   onClose(socket: string, code: number, reason: string): Promise<void>;
   onAlarm(): Promise<void>;
+  // Defined by the gadget runtime; calls the gadget's onApproval.
+  __kodoApprovalSettled(status: ApprovalStatus): Promise<void>;
 }
 
 // What a cell runs and who may use it, set by its workspace.
@@ -50,6 +52,18 @@ interface SocketAttachment {
 }
 
 const READ_METHODS = new Set(["GET", "HEAD"]);
+
+// The approvals the cell is waiting on for its gadget, and when it next asks
+// the Gatekeeper about them. It asks soon after a call is queued, then less
+// and less often.
+interface ApprovalWatch {
+  ids: string[];
+  at: number;
+  delay: number;
+}
+const APPROVAL_POLL_FIRST_MS = 2_000;
+const APPROVAL_POLL_MAX_MS = 60_000;
+const MAX_WATCHED_APPROVALS = 100;
 
 // A failed gadget call, with the HTTP status that reports it.
 class GadgetError extends Error {
@@ -129,11 +143,36 @@ export class Cell extends DurableObject<Env> {
   }
 
   async setGadgetAlarm(when: number): Promise<void> {
-    await this.ctx.storage.setAlarm(when);
+    await this.adoptAlarm();
+    this.ctx.storage.kv.put("gadget-alarm", when);
+    await this.schedule();
   }
 
   async deleteGadgetAlarm(): Promise<void> {
-    await this.ctx.storage.deleteAlarm();
+    await this.adoptAlarm();
+    this.ctx.storage.kv.delete("gadget-alarm");
+    await this.schedule();
+  }
+
+  // Called by the kernel's host binding when one of this cell's calls is
+  // queued for approval. The cell asks the Gatekeeper about it until it
+  // settles, then tells the gadget.
+  async trackApproval(id: string): Promise<void> {
+    await this.adoptAlarm();
+    const watch = this.ctx.storage.kv.get<ApprovalWatch>("approvals") ?? { ids: [], at: 0, delay: 0 };
+    if (!watch.ids.includes(id)) watch.ids = [...watch.ids, id].slice(-MAX_WATCHED_APPROVALS);
+    const at = Date.now() + APPROVAL_POLL_FIRST_MS;
+    this.ctx.storage.kv.put("approvals", { ids: watch.ids, at: watch.at && watch.at < at ? watch.at : at, delay: APPROVAL_POLL_FIRST_MS });
+    await this.schedule();
+  }
+
+  // The state of some of this cell's approvals, from the Gatekeeper.
+  async queryApprovals(ids: string[]): Promise<ApprovalStatus[]> {
+    const binding = this.binding();
+    const cell = this.ctx.storage.kv.get<string>("cell");
+    if (!binding || !cell) return ids.map((id) => ({ id, state: "unknown" }));
+    const res = await gatekeeper(this.env, "/v1/approvals/query", { cell, owner: binding.owner, ids });
+    return fromApprovals(((await res.json()) as { approvals: Parameters<typeof fromApprovals>[0] }).approvals);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -191,15 +230,85 @@ export class Cell extends DurableObject<Env> {
     }
   }
 
-  // A gadget alarm. One that fails is logged and not retried.
+  // The cell's one alarm serves the gadget's alarm and the approvals it is
+  // waiting on. A gadget alarm that fails is logged and not retried.
   async alarm(): Promise<void> {
-    const cell = this.ctx.storage.kv.get<string>("cell");
-    if (!cell || !this.binding()) return;
-    try {
-      await this.call(cell, (gadget) => gadget.onAlarm());
-    } catch (err) {
-      console.log(`cell ${cell}: gadget alarm failed: ${err instanceof Error ? err.message : err}`);
+    const kv = this.ctx.storage.kv;
+    const cell = kv.get<string>("cell");
+    const now = Date.now();
+    if (cell && this.binding()) {
+      const gadgetAt = kv.get<number>("gadget-alarm");
+      // Before the cell kept its own schedule, every alarm was the gadget's.
+      const gadgetDue = kv.get("schedule") ? gadgetAt !== undefined && gadgetAt <= now : true;
+      if (gadgetDue) {
+        kv.delete("gadget-alarm");
+        try {
+          await this.call(cell, (gadget) => gadget.onAlarm());
+        } catch (err) {
+          console.log(`cell ${cell}: gadget alarm failed: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+      const watch = kv.get<ApprovalWatch>("approvals");
+      if (watch && watch.at <= now) await this.pollApprovals(cell, watch);
     }
+    await this.schedule();
+  }
+
+  // Asks the Gatekeeper about the approvals the cell is waiting on and calls
+  // the gadget's onApproval once for each that has settled. A gadget that
+  // fails in onApproval is not called again for that approval.
+  private async pollApprovals(cell: string, watch: ApprovalWatch): Promise<void> {
+    const kv = this.ctx.storage.kv;
+    let settled: ApprovalStatus[] = [];
+    try {
+      settled = (await this.queryApprovals(watch.ids)).filter((s) => SETTLED.has(s.state));
+    } catch (err) {
+      console.log(`cell ${cell}: asking about approvals failed: ${err instanceof Error ? err.message : err}`);
+    }
+    for (const status of settled) {
+      if (status.state === "unknown") {
+        console.log(`cell ${cell}: the Gatekeeper does not know approval ${status.id}`);
+        continue;
+      }
+      try {
+        await this.call(cell, (gadget) => gadget.__kodoApprovalSettled(status));
+      } catch (err) {
+        console.log(`cell ${cell}: gadget onApproval failed for ${status.id}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    // Calls queued while this ran are in the stored watch, and asked about soon.
+    const current = kv.get<ApprovalWatch>("approvals") ?? watch;
+    const done = new Set(settled.map((s) => s.id));
+    const ids = current.ids.filter((id) => !done.has(id));
+    if (!ids.length) {
+      kv.delete("approvals");
+    } else if (current.at !== watch.at) {
+      kv.put("approvals", { ...current, ids });
+    } else {
+      const delay = Math.min(watch.delay * 2, APPROVAL_POLL_MAX_MS);
+      kv.put("approvals", { ids, at: Date.now() + delay, delay });
+    }
+  }
+
+  // Sets the cell's alarm to the earliest of the gadget's alarm and the next
+  // time to ask about approvals.
+  private async schedule(): Promise<void> {
+    const kv = this.ctx.storage.kv;
+    kv.put("schedule", 1);
+    const times = [kv.get<number>("gadget-alarm"), kv.get<ApprovalWatch>("approvals")?.at].filter(
+      (t): t is number => typeof t === "number",
+    );
+    if (times.length) await this.ctx.storage.setAlarm(Math.min(...times));
+    else await this.ctx.storage.deleteAlarm();
+  }
+
+  // A cell from before the cell kept its own schedule holds the gadget's
+  // alarm only as the native alarm; keep it as the gadget's.
+  private async adoptAlarm(): Promise<void> {
+    const kv = this.ctx.storage.kv;
+    if (kv.get("schedule")) return;
+    const existing = await this.ctx.storage.getAlarm();
+    if (existing !== null && kv.get("gadget-alarm") === undefined) kv.put("gadget-alarm", existing);
   }
 
   private acceptSocket(cell: string, caller: GadgetCaller): Response {

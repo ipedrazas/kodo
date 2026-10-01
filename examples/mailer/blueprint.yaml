@@ -1,0 +1,15 @@
+# Blueprint mailer 1.0.0. It declares that it may send email through its
+# owner's connection; each send waits for the owner's approval.
+apiVersion: kodo.dev/v1alpha1
+kind: Blueprint
+metadata:
+  name: mailer-1.0.0
+spec:
+  fleet: kodo
+  blueprint: mailer
+  version: 1.0.0
+  source:
+    name: mailer
+    key: gadget.js
+  capabilities:
+    - email:outbox:send

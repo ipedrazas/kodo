@@ -29,6 +29,23 @@ export interface CapabilityResponse {
   body: ArrayBuffer;
 }
 
+// What a gadget learns about a call that waited for its owner's approval.
+// The state is pending, executing, done (result holds the provider's
+// answer), failed, rejected, expired, or unknown for an id that is not this
+// cell's.
+export interface ApprovalStatus {
+  id: string;
+  state: string;
+  capability?: string;
+  reason?: string;
+  createdAt?: string;
+  decidedAt?: string;
+  result?: CapabilityResponse;
+}
+
+// States after which an approval never changes.
+export const SETTLED = new Set(["done", "failed", "rejected", "expired", "unknown"]);
+
 // Headers that sign a call from the kernel to the Gatekeeper.
 export const FLEET_HEADER = "x-kodo-fleet";
 export const TIMESTAMP_HEADER = "x-kodo-timestamp";
@@ -116,47 +133,99 @@ export class GadgetHost extends WorkerEntrypoint<Env> {
     if (body !== undefined && !(body instanceof ArrayBuffer)) throw new Error("body must be an ArrayBuffer");
     if (body && body.byteLength > MAX_REQUEST_BODY) throw new Error("request body larger than 1 MiB");
 
-    const config = gatekeeperConfig(this.env);
-    if (!config.url || !config.key || !config.fleet) return denied(503, "this fleet has no Gatekeeper configured");
     const context = await this.env.CELL.getByName(cell).callContext();
     if (!context) return denied(404, `cell ${cell} does not exist`);
 
-    const payload = JSON.stringify({
-      ...context,
-      cell,
-      capability,
-      request: {
-        method,
-        path,
-        headers: stringHeaders(request?.headers),
-        ...(body && body.byteLength ? { body: toBase64(new Uint8Array(body)) } : {}),
-      },
-    });
-    const timestamp = String(Math.floor(Date.now() / 1000));
     let res: Response;
     try {
-      res = await fetch(new URL("/v1/calls", config.url), {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          [FLEET_HEADER]: config.fleet,
-          [TIMESTAMP_HEADER]: timestamp,
-          [SIGNATURE_HEADER]: "v1=" + (await sign(config.key, `${timestamp}.${payload}`)),
+      res = await gatekeeper(this.env, "/v1/calls", {
+        ...context,
+        cell,
+        capability,
+        request: {
+          method,
+          path,
+          headers: stringHeaders(request?.headers),
+          ...(body && body.byteLength ? { body: toBase64(new Uint8Array(body)) } : {}),
         },
-        body: payload,
-        signal: AbortSignal.timeout(GATEKEEPER_TIMEOUT_MS),
       });
     } catch (err) {
-      return denied(502, `gatekeeper unreachable: ${err instanceof Error ? err.message : String(err)}`);
+      if (err instanceof GatekeeperError) return denied(err.status, err.message);
+      throw err;
     }
-    if (!res.ok) return denied(502, `gatekeeper refused the call: ${res.status} ${(await res.text()).trim()}`);
-    const answer = (await res.json()) as { status: number; headers?: Record<string, string>; body?: string };
-    return {
-      status: answer.status,
-      headers: answer.headers ?? {},
-      body: answer.body ? fromBase64(answer.body).buffer as ArrayBuffer : new ArrayBuffer(0),
-    };
+    const answer = fromAnswer((await res.json()) as Answer);
+    // A call parked for approval: the cell follows it and tells the gadget
+    // how it ends.
+    const approval = answer.headers["x-kodo-approval"];
+    if (answer.headers["x-kodo-decision"] === "pending" && approval) {
+      await this.env.CELL.getByName(cell).trackApproval(approval);
+    }
+    return answer;
   }
+
+  // The state of one of this cell's approvals.
+  async approval(props: CellProps, id: string): Promise<ApprovalStatus> {
+    const cell = await verified(this.env, props);
+    if (typeof id !== "string" || !id) throw new Error("approval id must be a string");
+    const [status] = await this.env.CELL.getByName(cell).queryApprovals([id]);
+    return status;
+  }
+}
+
+// An answer from the Gatekeeper, with the body base64-encoded.
+interface Answer {
+  status: number;
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+function fromAnswer(answer: Answer): CapabilityResponse {
+  return {
+    status: answer.status,
+    headers: answer.headers ?? {},
+    body: answer.body ? (fromBase64(answer.body).buffer as ArrayBuffer) : new ArrayBuffer(0),
+  };
+}
+
+// The Gatekeeper's answer about some of a cell's approvals.
+export function fromApprovals(statuses: (Omit<ApprovalStatus, "result"> & { result?: Answer })[]): ApprovalStatus[] {
+  return statuses.map((s) => ({ ...s, result: s.result ? fromAnswer(s.result) : undefined }));
+}
+
+// A request to the Gatekeeper that it did not answer, or refused.
+export class GatekeeperError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+// Sends a signed request to the Gatekeeper and returns its 200 answer.
+export async function gatekeeper(env: Env, path: string, body: unknown): Promise<Response> {
+  const config = gatekeeperConfig(env);
+  if (!config.url || !config.key || !config.fleet) throw new GatekeeperError(503, "this fleet has no Gatekeeper configured");
+  const payload = JSON.stringify(body);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  let res: Response;
+  try {
+    res = await fetch(new URL(path, config.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [FLEET_HEADER]: config.fleet,
+        [TIMESTAMP_HEADER]: timestamp,
+        [SIGNATURE_HEADER]: "v1=" + (await sign(config.key, `${timestamp}.${payload}`)),
+      },
+      body: payload,
+      signal: AbortSignal.timeout(GATEKEEPER_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw new GatekeeperError(502, `gatekeeper unreachable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!res.ok) throw new GatekeeperError(502, `gatekeeper refused the call: ${res.status} ${(await res.text()).trim()}`);
+  return res;
 }
 
 function denied(status: number, error: string): CapabilityResponse {
@@ -206,9 +275,28 @@ function fromBase64(s: string): Uint8Array {
 export const GADGET_RUNTIME = `
 import { DurableObject } from "cloudflare:workers";
 
+const toResponse = (res) => {
+  const empty = res.body.byteLength === 0 || [204, 205, 304].includes(res.status);
+  return new Response(empty ? null : res.body, { status: res.status, headers: res.headers });
+};
+
+// An approval as the gadget sees it: the provider's answer, once there is
+// one, as a Response.
+const toApproval = (a) => Object.freeze({
+  id: a.id,
+  capability: a.capability ?? null,
+  state: a.state,
+  reason: a.reason ?? null,
+  createdAt: a.createdAt ? new Date(a.createdAt) : null,
+  decidedAt: a.decidedAt ? new Date(a.decidedAt) : null,
+  response: a.result ? toResponse(a.result) : null,
+});
+
 // One granted capability. fetch() takes a path relative to the capability's
 // resource and returns a Response; the Gatekeeper makes the actual call with
-// the owner's credentials, which the gadget never sees.
+// the owner's credentials, which the gadget never sees. A call that sends,
+// writes or deletes waits for the owner's approval: fetch() answers 202 with
+// x-kodo-decision: pending and the approval's id in x-kodo-approval.
 class Grant {
   #call;
 
@@ -228,8 +316,7 @@ class Grant {
       headers,
       body,
     }));
-    const empty = res.body.byteLength === 0 || [204, 205, 304].includes(res.status);
-    return new Response(empty ? null : res.body, { status: res.status, headers: res.headers });
+    return toResponse(res);
   }
 }
 
@@ -274,6 +361,17 @@ export class Gadget extends DurableObject {
 
   deleteAlarm() {
     return this.#host((host, props) => host.deleteAlarm(props));
+  }
+
+  // The state of an approval one of this cell's calls is waiting on, by id:
+  // {id, capability, state, reason, createdAt, decidedAt, response}.
+  async approval(id) {
+    return toApproval(await this.#host((host, props) => host.approval(props, id)));
+  }
+
+  // Called by the cell when an approval this cell is waiting on settles.
+  async __kodoApprovalSettled(status) {
+    if (typeof this.onApproval === "function") await this.onApproval(toApproval(status));
   }
 }
 `;

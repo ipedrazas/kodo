@@ -32,16 +32,56 @@ func ParseCapability(s string) (Capability, error) {
 	return Capability{Provider: s[:first], Resource: s[first+1 : last], Verb: s[last+1:]}, nil
 }
 
+// Verbs whose calls change something outside: they wait in the approval
+// queue until the cell's owner approves them. A read runs at once; any other
+// verb is denied.
+var sideEffecting = map[string]bool{"write": true, "send": true, "delete": true}
+
+// SideEffecting reports whether a capability's calls wait for approval, and
+// whether its verb is one the Gatekeeper knows at all.
+func SideEffecting(c Capability) (waits, known bool) {
+	if c.Verb == "read" {
+		return false, true
+	}
+	return sideEffecting[c.Verb], sideEffecting[c.Verb]
+}
+
 // Provider is one external service the Gatekeeper can call for gadgets.
 type Provider interface {
 	// Prepare checks a gadget's request against a capability and returns the
 	// request to make upstream, without credentials. An error is a denial,
-	// and its message says why.
-	Prepare(ctx context.Context, c Capability, r CallRequest) (*http.Request, error)
+	// and its message says why. account is the connected account the call
+	// acts as.
+	Prepare(ctx context.Context, c Capability, r CallRequest, account string) (*http.Request, error)
 	// Authorize adds a user's token to a prepared request.
 	Authorize(req *http.Request, token string)
-	// Account checks a token and returns the account it belongs to.
-	Account(ctx context.Context, token string) (string, error)
+	// Account checks a token and returns the account it acts as. requested
+	// is the account the user asked for, for providers where they choose
+	// one (see AccountChooser); otherwise it is empty.
+	Account(ctx context.Context, token, requested string) (string, error)
 	// ResponseHeaders lists the upstream response headers a gadget may see.
 	ResponseHeaders() []string
+	// Describe says what a prepared call will do, for the person asked to
+	// approve it.
+	Describe(c Capability, r CallRequest, account string) Summary
+}
+
+// AccountChooser is a provider whose users name the account when they
+// connect, such as the From address of email.
+type AccountChooser interface {
+	// AccountPrompt is the label for that field.
+	AccountPrompt() string
+}
+
+// Summary describes a call for a person: a title, the facts that matter, and
+// the content it will send.
+type Summary struct {
+	Title  string  `json:"title"`
+	Fields []Field `json:"fields,omitempty"`
+	Body   string  `json:"body,omitempty"`
+}
+
+type Field struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }

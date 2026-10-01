@@ -302,6 +302,11 @@ tasks:
     cmds:
       - test/e2e/gatekeeper.sh
 
+  k3s:approvals-test:
+    desc: Check the approval queue end to end on hiddenfield.dev (RESEND_API_KEY and RESEND_FROM in .env; restarts the Gatekeeper twice)
+    cmds:
+      - test/e2e/approvals.sh
+
   k3s:identity-test:
     desc: Log in through the hiddenfield.dev gateway as the test users and check identity, TLS and sharing
     cmds:

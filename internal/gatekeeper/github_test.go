@@ -28,7 +28,7 @@ func TestGitHubScope(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		req, err := g.Prepare(context.Background(), c, CallRequest{Method: method, Path: path})
+		req, err := g.Prepare(context.Background(), c, CallRequest{Method: method, Path: path}, "")
 		if err != nil {
 			return "", err
 		}
@@ -77,7 +77,7 @@ func TestGitHubPassesOnlySafeHeaders(t *testing.T) {
 	req, err := GitHub{}.Prepare(context.Background(), c, CallRequest{
 		Method:  "GET",
 		Headers: map[string]string{"accept": "application/vnd.github.raw", "authorization": "Bearer stolen", "host": "evil"},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

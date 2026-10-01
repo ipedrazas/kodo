@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -16,13 +17,18 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-// Store is the Gatekeeper's bucket: vault/ and audit/ objects. Only the
-// Gatekeeper's credentials can read it; a fleet's cannot.
+// Store is the Gatekeeper's bucket: vault/, approvals/ and audit/ objects.
+// Only the Gatekeeper's credentials can read it; a fleet's cannot.
 type Store interface {
 	Get(ctx context.Context, key string) ([]byte, error)
+	// GetVersion returns an object and its version, which Replace checks.
+	GetVersion(ctx context.Context, key string) ([]byte, string, error)
 	Put(ctx context.Context, key string, data []byte) error
 	// Create writes an object only if none exists at key, else ErrExists.
 	Create(ctx context.Context, key string, data []byte) error
+	// Replace writes an object only if it is still at version, else
+	// ErrConflict, and returns its new version.
+	Replace(ctx context.Context, key string, data []byte, version string) (string, error)
 	Delete(ctx context.Context, key string) error
 	List(ctx context.Context, prefix string) ([]string, error)
 }
@@ -30,6 +36,7 @@ type Store interface {
 var (
 	ErrNotFound = errors.New("object not found")
 	ErrExists   = errors.New("object already exists")
+	ErrConflict = errors.New("object changed since it was read")
 )
 
 // S3Store is a Store on an S3-compatible bucket, under an optional prefix.
@@ -78,15 +85,22 @@ func nilIfEmpty(s string) *string {
 func (s *S3Store) key(k string) *string { return aws.String(s.Prefix + k) }
 
 func (s *S3Store) Get(ctx context.Context, key string) ([]byte, error) {
+	data, _, err := s.GetVersion(ctx, key)
+	return data, err
+}
+
+// GetVersion uses the object's ETag as its version.
+func (s *S3Store) GetVersion(ctx context.Context, key string) ([]byte, string, error) {
 	out, err := s.Client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.Bucket, Key: s.key(key)})
 	if err != nil {
 		if status(err) == http.StatusNotFound {
-			return nil, ErrNotFound
+			return nil, "", ErrNotFound
 		}
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { _ = out.Body.Close() }()
-	return io.ReadAll(out.Body)
+	data, err := io.ReadAll(out.Body)
+	return data, aws.ToString(out.ETag), err
 }
 
 func (s *S3Store) Put(ctx context.Context, key string, data []byte) error {
@@ -105,6 +119,23 @@ func (s *S3Store) Create(ctx context.Context, key string, data []byte) error {
 		return ErrExists
 	}
 	return err
+}
+
+func (s *S3Store) Replace(ctx context.Context, key string, data []byte, version string) (string, error) {
+	out, err := s.Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: &s.Bucket, Key: s.key(key), Body: bytes.NewReader(data), ContentType: aws.String("application/json"),
+		IfMatch: aws.String(version),
+	})
+	switch status(err) {
+	case http.StatusPreconditionFailed, http.StatusConflict:
+		return "", ErrConflict
+	case http.StatusNotFound:
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return aws.ToString(out.ETag), nil
 }
 
 func (s *S3Store) Delete(ctx context.Context, key string) error {
@@ -137,26 +168,42 @@ func status(err error) int {
 
 // MemStore is a Store in memory, for tests.
 type MemStore struct {
-	mu      sync.Mutex
-	objects map[string][]byte
+	mu       sync.Mutex
+	objects  map[string][]byte
+	versions map[string]int
+	writes   int
 }
 
-func NewMemStore() *MemStore { return &MemStore{objects: map[string][]byte{}} }
+func NewMemStore() *MemStore {
+	return &MemStore{objects: map[string][]byte{}, versions: map[string]int{}}
+}
 
-func (m *MemStore) Get(_ context.Context, key string) ([]byte, error) {
+func (m *MemStore) Get(ctx context.Context, key string) ([]byte, error) {
+	data, _, err := m.GetVersion(ctx, key)
+	return data, err
+}
+
+func (m *MemStore) GetVersion(_ context.Context, key string) ([]byte, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.objects[key]
 	if !ok {
-		return nil, ErrNotFound
+		return nil, "", ErrNotFound
 	}
-	return bytes.Clone(b), nil
+	return bytes.Clone(b), strconv.Itoa(m.versions[key]), nil
+}
+
+// write stores an object under a new version; m.mu must be held.
+func (m *MemStore) write(key string, data []byte) {
+	m.writes++
+	m.objects[key] = bytes.Clone(data)
+	m.versions[key] = m.writes
 }
 
 func (m *MemStore) Put(_ context.Context, key string, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.objects[key] = bytes.Clone(data)
+	m.write(key, data)
 	return nil
 }
 
@@ -166,14 +213,28 @@ func (m *MemStore) Create(_ context.Context, key string, data []byte) error {
 	if _, ok := m.objects[key]; ok {
 		return ErrExists
 	}
-	m.objects[key] = bytes.Clone(data)
+	m.write(key, data)
 	return nil
+}
+
+func (m *MemStore) Replace(_ context.Context, key string, data []byte, version string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.objects[key]; !ok {
+		return "", ErrNotFound
+	}
+	if strconv.Itoa(m.versions[key]) != version {
+		return "", ErrConflict
+	}
+	m.write(key, data)
+	return strconv.Itoa(m.versions[key]), nil
 }
 
 func (m *MemStore) Delete(_ context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.objects, key)
+	delete(m.versions, key)
 	return nil
 }
 
