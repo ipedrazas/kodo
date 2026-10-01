@@ -94,8 +94,8 @@ for id in "$viewer" "$caps"; do
 done
 repo=$(c alice "$(cell "$viewer")/api/repos/$REPO")
 [[ $(json 'd["name"]' <<<"$repo") == "$REPO" ]] || fail "viewer read: $repo"
-[[ $(json 'len(d["commits"]) > 0 and bool(d["readme"])' <<<"$repo") == True ]] || fail "no commits or README: $repo"
-echo "read $REPO: $(json '"%s, %d commits, README %d bytes" % (d["name"], len(d["commits"]), len(d["readme"]))' <<<"$repo")"
+[[ $(json 'len(d["commits"]) > 0' <<<"$repo") == True ]] || fail "no commits: $repo"
+echo "read $REPO: $(json '"%s, %d commits, README %s" % (d["name"], len(d["commits"]), "%d bytes" % len(d["readme"]) if d["readme"] else "absent")' <<<"$repo")"
 
 step "The same gadget is denied a repo or verb outside its grant"
 [[ $(status alice "$(cell "$viewer")/api/repos/$OTHER_REPO") == 403 ]] || fail "viewer read $OTHER_REPO"

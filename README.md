@@ -92,7 +92,7 @@ Images are built by CI for amd64 and arm64: `ghcr.io/ipedrazas/kodo-{kernel,oper
 
 ## Status
 
-Phases 0 to 5 are done: celld spike, kernel, Blueprints and workspaces, operator, identity and sharing. Phase 7 (the Gatekeeper read path) is in progress; Phase 6 (autoscaling and observability) has not started. The [plan](plans/gadgets-on-kubernetes.md) has the details and what comes next: approvals, the inference gateway and the agent.
+Phases 0 to 5 and 7 are done: celld spike, kernel, Blueprints and workspaces, operator, identity and sharing, and the Gatekeeper read path. Phase 6 (autoscaling and observability) has not started. The [plan](plans/gadgets-on-kubernetes.md) has the details and what comes next: approvals, the inference gateway and the agent.
 
 ## License
 

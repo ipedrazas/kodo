@@ -158,9 +158,13 @@ A small exporter that turns celld's node leases and `/state` into Prometheus met
 
 ---
 
-## Phase 7: Gatekeeper read path (in progress)
+## Phase 7: Gatekeeper read path (done)
 
-On branch `phase-7/gatekeeper`. Built and tested locally (Go unit tests, kernel tests under `celld dev`, OpenBao setup against a dev server); `test/e2e/gatekeeper.sh` checks every criterion on k3s and has not run there yet. GitHub tokens are personal access tokens pasted at `app.<domain>/gatekeeper/`; an OAuth app flow can replace that without changing the vault.
+In [#11](https://github.com/ipedrazas/kodo/pull/11), verified on the k3s cluster by `test/e2e/gatekeeper.sh` (`task k3s:gatekeeper-test`) against the real OpenBao, Tigris and GitHub; [deploy/k3s/README.md](../deploy/k3s/README.md). Users connect GitHub with a personal access token at `app.<domain>/gatekeeper/`; an OAuth app flow can replace that without changing the vault. Findings:
+
+- Tigris's endpoint has no fixed addresses, so fleets reach the bucket through an egress proxy in the Gatekeeper (celld honours `HTTPS_PROXY`) rather than an `ipBlock`.
+- celld 0.6.0 hangs a burst of concurrent host calls on a freshly loaded gadget; the gadget runtime lets the first call finish before the others start.
+- A new fleet is trusted once the kubelet refreshes the Gatekeeper's trust Secret mount, up to about two minutes after the Fleet is created.
 
 **User stories**: capabilities, not credentials; token vault; default-deny network; audit.
 
@@ -170,15 +174,15 @@ The Gatekeeper as a stateless Go service outside every fleet, with per-request s
 
 ### Acceptance criteria
 
-- [ ] A gadget with a granted `github:repo/<org>/<repo>:read` reads that repo
-- [ ] The same gadget is denied a repo or verb outside its grant
-- [ ] A gadget without the grant has no binding at all
-- [ ] The Gatekeeper rejects a call that does not come from a fleet it trusts
-- [ ] Direct outbound connections from a fleet pod fail, except to the Gatekeeper, inference gateway and bucket
-- [ ] OAuth tokens are stored only as ciphertext, the Gatekeeper holds no encryption key, and no token reaches a fleet
-- [ ] A fleet's bucket credentials cannot read `vault/` or `approvals/`
-- [ ] The vault backend is an interface with OpenBao transit as its one implementation
-- [ ] Each call is in the audit log with user, gadget, cell, grant and decision
+- [x] A gadget with a granted `github:repo/<org>/<repo>:read` reads that repo
+- [x] The same gadget is denied a repo or verb outside its grant
+- [x] A gadget without the grant has no binding at all
+- [x] The Gatekeeper rejects a call that does not come from a fleet it trusts
+- [x] Direct outbound connections from a fleet pod fail, except to the Gatekeeper, inference gateway and bucket
+- [x] OAuth tokens are stored only as ciphertext, the Gatekeeper holds no encryption key, and no token reaches a fleet
+- [x] A fleet's bucket credentials cannot read `vault/` or `approvals/`
+- [x] The vault backend is an interface with OpenBao transit as its one implementation
+- [x] Each call is in the audit log with user, gadget, cell, grant and decision
 
 ---
 
