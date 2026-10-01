@@ -6,12 +6,12 @@ The application every kodo fleet runs. It serves each cell at `<cell-id>.g.<doma
 
 | Durable Object | One per | Holds |
 | --- | --- | --- |
-| `Cell` | gadget instance | Its binding (workspace, Blueprint version), sockets and alarm; the gadget runs inside it as a facet with its own database |
+| `Cell` | gadget instance | Its binding (workspace, Blueprint version), sockets, the gadget's alarm and the approvals it waits on; the gadget runs inside it as a facet with its own database |
 | `Workspace` | workspace | Quota and the list of cells; creates, moves and deletes them |
 | `Catalog` | fleet | Every published Blueprint version |
 | `Keys` | fleet | The key that signs each cell's identity for its gadget |
 
-A gadget reaches the outside world only through its grants. `GadgetHost.call` signs each call with the fleet's Gatekeeper key and sends the Gatekeeper the cell, its workspace, Blueprint version, owner and grants with the gadget's request; the Gatekeeper decides, holds the tokens and makes the call.
+A gadget reaches the outside world only through its grants. `GadgetHost.call` signs each call with the fleet's Gatekeeper key and sends the Gatekeeper the cell, its workspace, Blueprint version, owner and grants with the gadget's request; the Gatekeeper decides, holds the tokens and makes the call. A call the Gatekeeper parks for approval comes back as `202 pending`; the cell then asks `POST /v1/approvals/query` about it on its alarm (after 2 s, doubling to once a minute), which it shares with the gadget's alarm, and calls the gadget's `onApproval` when it settles.
 
 A cell serves only while its workspace has bound it; a hostname for any other cell is a 404. Gadget bundles are stored by SHA-256 through the `BUNDLES` R2 binding (`r2/bundles/sha256/<digest>.js` in the fleet bucket), and a cell checks the digest before it runs one.
 
@@ -68,4 +68,4 @@ task kernel:up TARGET=kind       # kind cluster, fleet, kernel, smoke test
 task kernel:up TARGET=k3s        # the same on the k3s cluster under gVisor
 ```
 
-The tests start `celld dev` on a temporary copy of the project and drive it through the API. `kernel.test.mjs` covers how gadgets run; `api.test.mjs` covers the registries and runs `examples/notes.js` against the gadget contract; `identity.test.mjs` covers identity, sharing and origins; `capabilities.test.mjs` covers grants and signed calls; `example.test.mjs` runs [`examples/repo-viewer`](../examples/repo-viewer). The harness plays the identity provider: it serves a JWKS and mints tokens for test users. It can also play the Gatekeeper: it checks each call's signature and answers with canned responses.
+The tests start `celld dev` on a temporary copy of the project and drive it through the API. `kernel.test.mjs` covers how gadgets run; `api.test.mjs` covers the registries and runs `examples/notes.js` against the gadget contract; `identity.test.mjs` covers identity, sharing and origins; `capabilities.test.mjs` covers grants and signed calls; `approvals.test.mjs` covers calls that wait for approval, across hibernation; `example.test.mjs` runs [`examples/repo-viewer`](../examples/repo-viewer) and `mailer.test.mjs` runs [`examples/mailer`](../examples/mailer). The harness plays the identity provider: it serves a JWKS and mints tokens for test users. It can also play the Gatekeeper: it checks each call's signature, answers with canned responses, and answers approval queries from a map the test controls.

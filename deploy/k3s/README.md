@@ -13,7 +13,7 @@ The LAN environment: cert-manager, Envoy Gateway, Dex and the operator-managed `
 
 ## Bring it up
 
-`.env` needs the Tigris admin key (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL_IAM`), `CLOUDFLARE_API_TOKEN` (Zone DNS Edit and Zone Read on hiddenfield.dev), `LETSENCRYPT_EMAIL`, and the Gatekeeper's OpenBao AppRole, which `task openbao:setup` writes (see [deploy/openbao](../openbao/README.md)).
+`.env` needs the Tigris admin key (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL_IAM`), `CLOUDFLARE_API_TOKEN` (Zone DNS Edit and Zone Read on hiddenfield.dev), `LETSENCRYPT_EMAIL`, and the Gatekeeper's OpenBao AppRole, which `task openbao:setup` writes (see [deploy/openbao](../openbao/README.md)). The approvals test also needs `RESEND_API_KEY` and `RESEND_FROM`, a From address on a domain verified in that Resend account.
 
 ```sh
 BAO_ADDR=http://openbao.alacasa.uk:8200 BAO_TOKEN=<admin> task openbao:setup   # once
@@ -21,6 +21,7 @@ task k3s:up KERNEL_IMAGE=ghcr.io/ipedrazas/kodo-kernel:main OPERATOR_IMAGE=ghcr.
   GATEKEEPER_IMAGE=ghcr.io/ipedrazas/kodo-gatekeeper:main
 task k3s:identity-test
 task k3s:gatekeeper-test        # Phase 7: grants, the Gatekeeper, egress, the vault and audit
+task k3s:approvals-test         # Phase 8: the approval queue; restarts the Gatekeeper twice
 ```
 
 ## Bucket keys

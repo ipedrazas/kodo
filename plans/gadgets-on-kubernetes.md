@@ -16,7 +16,7 @@ Durable decisions that apply across all phases:
 - **Key models**: Fleet, Workspace, Blueprint (name, version, bundle digest, capabilities, tier), Cell (workspace, cell id, blueprint version, owner), Grant (user, cell, capability), Share (user, cell, role).
 - **Go services**: the operator, the Gatekeeper and a small metrics exporter. Go does not sit on the request path to a gadget.
 - **CRDs**: `Fleet`, `Blueprint`, `Workspace` under `kodo.dev/v1alpha1`. Cells never go in etcd.
-- **Gatekeeper state**: the Gatekeeper is stateless. Encrypted tokens and approvals are bucket objects under prefixes only the Gatekeeper's credentials can read, never a fleet's. Every approval state change (pending → approved → executing → done, or rejected) is a conditional write, so two replicas cannot claim the same approval. An approval that fails mid-execution is reported as failed, not retried.
+- **Gatekeeper state**: the Gatekeeper is stateless. Encrypted tokens and approvals are bucket objects under prefixes only the Gatekeeper's credentials can read, never a fleet's. Every approval state change (pending → executing on approval → done or failed; pending → rejected or expired) is a write conditional on the object's ETag, so two replicas cannot claim the same approval. An approval left executing past a stale limit (a replica died mid-call) is reported as failed, never retried.
 - **Secrets**: tokens are encrypted through a vault interface and only the ciphertext is stored. OpenBao's transit engine is the first backend, with a derived key so each ciphertext is bound to its user and provider; a cloud KMS can follow. The Gatekeeper logs in with an AppRole (Kubernetes auth is also supported) whose policy allows only encrypt and decrypt. Platform secrets (bucket credentials, OIDC client secret, DNS-01 credentials) reach the cluster through External Secrets, from OpenBao where it is available. OpenBao is supported, not required.
 - **Bucket layout**: celld owns the layout of a fleet's bucket. Gadget bundles go through an R2 binding, which celld stores under `r2/bundles/sha256/<digest>.js`. Blueprint versions, workspaces and cell bindings are Durable Objects of the kernel (`Catalog`, `Workspace`, `Cell`), so they live in celld's cell state rather than as objects of ours. Objects outside any fleet (`vault/<user>/`, `approvals/<user>/<id>.json`, `audit/<yyyy>/<mm>/<dd>/`) live in the Gatekeeper's own bucket, with credentials scoped so a fleet's cannot read it; per-bucket scoping works on any S3 provider, where per-prefix policies do not.
 - **Storage contract**: whatever `celld diagnose` accepts, which includes conditional writes and ranged reads. A provider that fails it is unsupported.
@@ -187,6 +187,14 @@ The Gatekeeper as a stateless Go service outside every fleet, with per-request s
 ---
 
 ## Phase 8: Approval queue
+
+Built on branch `phase-8/approvals`; tested in Go (`internal/gatekeeper/approvals_test.go`, including racing replicas and a replica killed mid-call) and under `celld dev` (`kernel/test/approvals.test.mjs`, across hibernation). The k3s end-to-end test is `test/e2e/approvals.sh` (`task k3s:approvals-test`), not yet run. Decisions:
+
+- The email provider is `email:outbox:send`, backed by Resend with each user's own API key and From address; the gadget cannot set the sender or headers. Calls carry `Idempotency-Key: <approval id>`.
+- The cell, not the gadget, follows its pending approvals: it polls the Gatekeeper on the alarm it shares with the gadget's (2 s, doubling to a minute) and calls the gadget's `onApproval` once when one settles; `this.approval(id)` asks directly. The Gatekeeper does not push to fleets.
+- The owner approves at `app.<domain>/gatekeeper/`, which no other page may frame; the home page shows how many calls wait.
+- An approval runs with the grants it was queued under; revoking a grant does not cancel it.
+- The audit decision for a call from an untrusted fleet is now `untrusted`; `rejected` is the owner's.
 
 **User stories**: side-effecting calls wait for a human.
 

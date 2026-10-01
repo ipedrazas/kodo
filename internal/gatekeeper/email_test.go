@@ -13,10 +13,10 @@ func TestEmailAccountChecksKeyAndFromAddress(t *testing.T) {
 	e := Email{APIURL: f.URL}
 	ctx := context.Background()
 	for _, tc := range []struct{ key, from, want, err string }{
-		{resendKey, "alice@acme.test", "<alice@acme.test>", ""},
+		{resendKey, "alice@acme.test", "alice@acme.test", ""},
 		{resendKey, "Alice <alice@ACME.test>", `"Alice" <alice@ACME.test>`, ""},
-		{resendKey, "onboarding@resend.dev", "<onboarding@resend.dev>", ""},
-		{"re_sending_only", "alice@anything.test", "<alice@anything.test>", ""},
+		{resendKey, "onboarding@resend.dev", "onboarding@resend.dev", ""},
+		{"re_sending_only", "alice@anything.test", "alice@anything.test", ""},
 		{resendKey, "alice@pending.test", "", "not verified pending.test"},
 		{resendKey, "alice@other.test", "", "not verified other.test"},
 		{"re_wrong", "alice@acme.test", "", "did not accept the key"},
@@ -50,7 +50,7 @@ func TestEmailPrepareSendsOnlyTheMessageFromTheAccount(t *testing.T) {
 	var body map[string]any
 	_ = json.Unmarshal(raw, &body)
 	if body["from"] != `"Alice" <alice@acme.test>` || body["subject"] != "Hi" || body["html"] != "<p>x</p>" ||
-		len(body["to"].([]any)) != 2 || body["cc"].([]any)[0] != "<dan@example.com>" {
+		len(body["to"].([]any)) != 2 || body["cc"].([]any)[0] != "dan@example.com" || body["to"].([]any)[0] != `"Bob" <bob@example.com>` {
 		t.Errorf("body %s", raw)
 	}
 	for _, other := range []string{"email:inbox:send", "email:outbox:read"} {

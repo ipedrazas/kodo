@@ -125,9 +125,18 @@ func addresses(list addressList) (addressList, error) {
 		if err != nil || strings.ContainsAny(a, "\r\n") {
 			return nil, fmt.Errorf("%q is not an email address", a)
 		}
-		out = append(out, addr.String())
+		out = append(out, formatAddress(addr))
 	}
 	return out, nil
+}
+
+// formatAddress writes an address as Resend takes it: the bare address, or
+// "Name" <address>.
+func formatAddress(a *mail.Address) string {
+	if a.Name == "" {
+		return a.Address
+	}
+	return a.String()
 }
 
 func (e Email) Prepare(ctx context.Context, c Capability, r CallRequest, account string) (*http.Request, error) {
@@ -212,7 +221,7 @@ func (e Email) Account(ctx context.Context, token, requested string) (string, er
 	default:
 		return "", fmt.Errorf("resend did not accept the key: %s", res.Status)
 	}
-	return from.String(), nil
+	return formatAddress(from), nil
 }
 
 func (e Email) Describe(c Capability, r CallRequest, account string) Summary {

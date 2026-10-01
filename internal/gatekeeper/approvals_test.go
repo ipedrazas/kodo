@@ -190,7 +190,7 @@ func TestSendWaitsForApproval(t *testing.T) {
 	}
 	ap := list[0].(map[string]any)
 	summary := fmt.Sprint(ap["summary"])
-	for _, want := range []string{"Send an email", `"Alice" <alice@acme.test>`, "<bob@example.com>", "Quarterly numbers", "here they are."} {
+	for _, want := range []string{"Send an email", `"Alice" <alice@acme.test>`, "bob@example.com", "Quarterly numbers", "here they are."} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary lacks %q: %s", want, summary)
 		}
@@ -522,5 +522,14 @@ func TestQueueingFailsClosedWithoutTheAuditLog(t *testing.T) {
 	}
 	if ids, _ := h.srv.Approvals.IDs(context.Background(), alice); len(ids) != 0 {
 		t.Errorf("approval kept: %v", ids)
+	}
+}
+
+func TestOnlyRecentApprovalsCanBePending(t *testing.T) {
+	a := Approvals{TTL: time.Hour}
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	ids := []string{"20261001t115959-000000000000", "20261001t110001-000000000000", "20261001t105959-000000000000", "20260930t120000-000000000000"}
+	if got := a.Pending(ids, now); len(got) != 2 || got[1] != ids[1] {
+		t.Errorf("pending candidates %v", got)
 	}
 }

@@ -505,7 +505,11 @@ func (s *Server) listApprovals(w http.ResponseWriter, r *http.Request, u User) {
 		return
 	}
 	state := r.URL.Query().Get("state")
-	if len(ids) > listedApprovals && state == "" {
+	if state == StatePending {
+		// Older ones have expired, whether or not that is recorded yet.
+		ids = s.Approvals.Pending(ids, s.now())
+	}
+	if len(ids) > listedApprovals {
 		ids = ids[:listedApprovals]
 	}
 	approvals := []Approval{}

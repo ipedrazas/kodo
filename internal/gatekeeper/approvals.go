@@ -181,6 +181,18 @@ func (a Approvals) Delete(ctx context.Context, ap Approval) error {
 	return a.Store.Delete(ctx, approvalKey(ap.Owner.User, ap.ID))
 }
 
+// Pending returns the ids that can still be pending: those created within
+// the TTL. ids is newest first, as IDs returns it.
+func (a Approvals) Pending(ids []string, now time.Time) []string {
+	oldest := strings.ToLower(now.UTC().Add(-a.ttl()).Format("20060102T150405"))
+	for i, id := range ids {
+		if id < oldest {
+			return ids[:i]
+		}
+	}
+	return ids
+}
+
 // IDs lists a user's approval ids, newest first.
 func (a Approvals) IDs(ctx context.Context, user string) ([]string, error) {
 	keys, err := a.Store.List(ctx, path.Join("approvals", userKey(user))+"/")
