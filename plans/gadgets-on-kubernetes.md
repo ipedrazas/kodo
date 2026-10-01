@@ -48,7 +48,9 @@ See [spike/celld/PHASE1.md](../spike/celld/PHASE1.md). Durability held throughou
 
 ---
 
-## Phase 2: Kernel and one gadget end to end
+## Phase 2: Kernel and one gadget end to end (done)
+
+Merged in [#5](https://github.com/ipedrazas/kodo/pull/5). The cell-to-bundle binding by hand was replaced in Phase 3.
 
 **User stories**: routing by hostname; bundle loading by digest; per-cell SQLite; scale to zero.
 
@@ -58,18 +60,20 @@ The kernel as a real project in the repository, with its build, tests and deploy
 
 ### Acceptance criteria
 
-- [ ] A bundle uploaded by digest is served at its cell hostname
-- [ ] Two cells of the same bundle keep separate state
-- [ ] The gadget sees no bindings and cannot make outbound connections
-- [ ] A gadget error or an unknown bundle produces a clear response and does not affect other cells
-- [ ] An idle cell hibernates and the next request restores its state
-- [ ] WebSocket connections reach the gadget through the cell, which holds the socket
-- [ ] A gadget call that hangs is answered with an error within a bounded time, and the cell keeps serving other calls
-- [ ] Kernel tests run in CI; deploys to kind and to k3s under gVisor from one task
+- [x] A bundle uploaded by digest is served at its cell hostname
+- [x] Two cells of the same bundle keep separate state
+- [x] The gadget sees no bindings and cannot make outbound connections
+- [x] A gadget error or an unknown bundle produces a clear response and does not affect other cells
+- [x] An idle cell hibernates and the next request restores its state
+- [x] WebSocket connections reach the gadget through the cell, which holds the socket
+- [x] A gadget call that hangs is answered with an error within a bounded time, and the cell keeps serving other calls
+- [x] Kernel tests run in CI; deploys to kind and to k3s under gVisor from one task
 
 ---
 
-## Phase 3: Blueprints, workspaces and the gadget API
+## Phase 3: Blueprints, workspaces and the gadget API (done)
+
+Merged in [#6](https://github.com/ipedrazas/kodo/pull/6). The contract is [kernel/GADGETS.md](../kernel/GADGETS.md); the sample is [kernel/examples/notes.js](../kernel/examples/notes.js).
 
 **User stories**: versioned gadget templates; one instance per user or document; per-team quotas.
 
@@ -79,16 +83,18 @@ The Workspace registry and the first version of the API. Publishing a Blueprint 
 
 ### Acceptance criteria
 
-- [ ] A Blueprint version can be published and listed through the API
-- [ ] Creating two cells from one Blueprint yields two independent instances
-- [ ] A new Blueprint version does not alter existing cells; a cell can be moved to it explicitly
-- [ ] A Workspace lists its cells and enforces a cell quota
-- [ ] A cell not in any registry is not served
-- [ ] The gadget API document matches what the kernel enforces, with a sample gadget that uses all of it, including WebSocket messages and scheduled events delivered by the cell
+- [x] A Blueprint version can be published and listed through the API
+- [x] Creating two cells from one Blueprint yields two independent instances
+- [x] A new Blueprint version does not alter existing cells; a cell can be moved to it explicitly
+- [x] A Workspace lists its cells and enforces a cell quota
+- [x] A cell not in any registry is not served
+- [x] The gadget API document matches what the kernel enforces, with a sample gadget that uses all of it, including WebSocket messages and scheduled events delivered by the cell
 
 ---
 
-## Phase 4: Operator and CRDs
+## Phase 4: Operator and CRDs (done)
+
+Merged in [#7](https://github.com/ipedrazas/kodo/pull/7). Verified end to end on kind in CI and on the k3s cluster under gVisor; see [config/README.md](../config/README.md).
 
 **User stories**: declarative fleets; runs on any conformant Kubernetes.
 
@@ -98,17 +104,19 @@ The Go operator. A `Fleet` reconciles into the celld workload, its Services, its
 
 ### Acceptance criteria
 
-- [ ] Applying a Fleet produces a serving fleet with the kernel deployed
-- [ ] Changing the kernel version on a Fleet rolls it out with no failed requests
-- [ ] Changing the celld version restarts the fleet in the documented order and loses no committed writes
-- [ ] The internal listener is unreachable from outside the fleet's pods
-- [ ] Pod termination grace is long enough for celld's handoff, verified by a rolling restart under load
-- [ ] Applying Blueprint and Workspace resources has the same effect as the API calls
-- [ ] Deleting a Fleet leaves its bucket data untouched
+- [x] Applying a Fleet produces a serving fleet with the kernel deployed
+- [x] Changing the kernel version on a Fleet rolls it out with no failed requests
+- [x] Changing the celld version restarts the fleet in the documented order and loses no committed writes
+- [x] The internal listener is unreachable from outside the fleet's pods
+- [x] Pod termination grace is long enough for celld's handoff, verified by a rolling restart under load
+- [x] Applying Blueprint and Workspace resources has the same effect as the API calls
+- [x] Deleting a Fleet leaves its bucket data untouched
 
 ---
 
-## Phase 5: Identity, TLS and sharing
+## Phase 5: Identity, TLS and sharing (done)
+
+Merged in [#9](https://github.com/ipedrazas/kodo/pull/9), running at hiddenfield.dev on the LAN ([deploy/k3s/README.md](../deploy/k3s/README.md)); public access is [#8](https://github.com/ipedrazas/kodo/issues/8). Not built: the optional anonymous capability URLs, and workspace membership (any logged-in user can create cells in any workspace, within its quota).
 
 **User stories**: OIDC at the gateway; wildcard TLS; per-user instances; shares.
 
@@ -118,13 +126,13 @@ Gateway API with OIDC against a customer IdP (Dex in kind), the wildcard certifi
 
 ### Acceptance criteria
 
-- [ ] Unauthenticated requests are redirected to the IdP
-- [ ] The kernel rejects a missing, unsigned or expired identity header
-- [ ] Two users each run their own instance of one gadget and cannot open each other's
-- [ ] Sharing a cell with a role grants the second user access; revoking removes it
-- [ ] The gadget receives the caller's identity but no credential
-- [ ] Wildcard certificate issues and renews on the k3s cluster
-- [ ] Each cell is served from its own origin
+- [x] Unauthenticated requests are redirected to the IdP
+- [x] The kernel rejects a missing, unsigned or expired identity header
+- [x] Two users each run their own instance of one gadget and cannot open each other's
+- [x] Sharing a cell with a role grants the second user access; revoking removes it
+- [x] The gadget receives the caller's identity but no credential
+- [x] Wildcard certificate issues and renews on the k3s cluster
+- [x] Each cell is served from its own origin
 
 ---
 

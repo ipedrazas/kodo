@@ -183,3 +183,15 @@ describe("origins", () => {
     assert.equal(res.status, 403);
   });
 });
+
+describe("the app page", () => {
+  test("is served to a logged-in user at the root of the app host", async () => {
+    const res = await kernel.request("app.test", "/", { as: "alice" });
+    assert.equal(res.status, 200);
+    assert.match(res.body, /<title>kodo<\/title>/);
+  });
+
+  test("needs an identity", async () => {
+    assert.equal((await kernel.request("app.test", "/", { as: null })).status, 401);
+  });
+});

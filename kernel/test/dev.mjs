@@ -111,7 +111,8 @@ export async function startKernel({ vars = {}, env = {} } = {}) {
   for (;;) {
     if (child.exitCode !== null) throw new Error(`celld dev exited:\n${kernelApi.logs()}`);
     try {
-      if ((await request(port, "localhost", "/")).status === 404) return kernelApi;
+      // Any answer from the kernel means the deployment is serving.
+      if ([401, 404].includes((await request(port, "localhost", "/nothing")).status)) return kernelApi;
     } catch {
       // Not listening yet.
     }
