@@ -1,0 +1,17 @@
+# Blueprint hn-reader 1.0.0. It declares that it may read the Algolia HN
+# API and ask any model for summaries; its owner grants the web read and the
+# models it may use.
+apiVersion: kodo.dev/v1alpha1
+kind: Blueprint
+metadata:
+  name: hn-reader-1.0.0
+spec:
+  fleet: kodo
+  blueprint: hn-reader
+  version: 1.0.0
+  source:
+    name: hn-reader
+    key: gadget.js
+  capabilities:
+    - web:hn.algolia.com/api/v1:read
+    - inference:model/*:invoke

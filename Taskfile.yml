@@ -353,6 +353,11 @@ tasks:
     cmds:
       - test/e2e/inference.sh
 
+  k3s:examples-test:
+    desc: Use the daybreak and hn-reader examples through the hiddenfield.dev gateway as the test users
+    cmds:
+      - test/e2e/examples.sh
+
   k3s:identity-test:
     desc: Log in through the hiddenfield.dev gateway as the test users and check identity, TLS and sharing
     cmds:

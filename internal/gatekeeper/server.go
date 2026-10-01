@@ -336,7 +336,11 @@ func (s *Server) send(req *http.Request, p Provider, rec Record) (Answer, error)
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), timeout)
 	defer cancel()
-	res, err := s.Upstream.Do(req.WithContext(ctx))
+	client := s.Upstream
+	if own, ok := p.(OwnClient); ok {
+		client = own.Client()
+	}
+	res, err := client.Do(req.WithContext(ctx))
 	if err != nil {
 		s.log().Warn("upstream call failed", "cell", rec.Cell, "grant", rec.Grant, "err", err)
 		return Answer{}, errors.New(rec.Provider + " is unreachable")

@@ -24,6 +24,8 @@
 //	OPENBAO_TOKEN             token (development only)
 //	GITHUB_API_URL            default https://api.github.com
 //	RESEND_API_URL            the email provider's API; default https://api.resend.com
+//	GATEKEEPER_WEB_ALLOW      hosts gadgets may read public APIs of (the web provider): host,
+//	                          *.domain or *, comma-separated; without it there is no web provider
 //	INFERENCE_URL             the inference gateway, e.g. http://kodo-inference.envoy-gateway-system.svc;
 //	                          without it there is no inference provider
 //	INFERENCE_KEY_FILE        a file holding the key the inference gateway requires, read once at
@@ -110,6 +112,10 @@ func run(log *slog.Logger) error {
 	if inference.URL != "" {
 		providers["inference"] = inference
 	}
+	webAllow := list(os.Getenv("GATEKEEPER_WEB_ALLOW"))
+	if len(webAllow) > 0 {
+		providers["web"] = gatekeeper.Web{Allow: webAllow, HTTP: gatekeeper.PublicClient(time.Minute)}
+	}
 	srv := &gatekeeper.Server{
 		Trust:     gatekeeper.Trust{Dir: env("GATEKEEPER_TRUST_DIR", "/etc/kodo/fleets")},
 		Tokens:    gatekeeper.Tokens{Store: store, Vault: transit},
@@ -121,12 +127,7 @@ func run(log *slog.Logger) error {
 		Log:       log,
 	}
 
-	var allow []string
-	for _, a := range strings.Split(os.Getenv("GATEKEEPER_EGRESS_ALLOW"), ",") {
-		if a = strings.TrimSpace(a); a != "" {
-			allow = append(allow, a)
-		}
-	}
+	allow := list(os.Getenv("GATEKEEPER_EGRESS_ALLOW"))
 	egress := &gatekeeper.EgressProxy{Allow: allow, Log: log}
 
 	servers := []*http.Server{
@@ -140,7 +141,7 @@ func run(log *slog.Logger) error {
 	}
 	log.Info("gatekeeper serving", "version", version.String(), "public", servers[0].Addr, "internal", servers[1].Addr,
 		"egress", servers[2].Addr, "egress_allow", allow, "bucket", bucket, "openbao", transit.Addr,
-		"approval_ttl", ttl.String(), "approval_stale", stale.String(), "inference", inference.URL)
+		"approval_ttl", ttl.String(), "approval_stale", stale.String(), "inference", inference.URL, "web_allow", webAllow)
 
 	select {
 	case err := <-errs:
@@ -208,6 +209,17 @@ func openBao() (*vault.Transit, error) {
 		return nil, fmt.Errorf("unknown OPENBAO_AUTH %q", method)
 	}
 	return t, nil
+}
+
+// list splits a comma-separated setting.
+func list(v string) []string {
+	var out []string
+	for _, a := range strings.Split(v, ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func duration(name string, def time.Duration) (time.Duration, error) {

@@ -80,7 +80,7 @@ const res = await this.grants["inference:model/default:invoke"].fetch("/chat/com
 });
 ```
 
-The contract is [kernel/GADGETS.md](kernel/GADGETS.md). Four examples: [kernel/examples/notes.js](kernel/examples/notes.js) uses storage, WebSockets and alarms; [examples/repo-viewer](examples/repo-viewer/README.md) reads GitHub through a grant, with a step-by-step deploy guide; [examples/mailer](examples/mailer/README.md) drafts emails that are sent once their owner approves them; [examples/ask](examples/ask/README.md) asks a model and keeps the conversation.
+The contract is [kernel/GADGETS.md](kernel/GADGETS.md). Six examples: [kernel/examples/notes.js](kernel/examples/notes.js) uses storage, WebSockets and alarms; [examples/repo-viewer](examples/repo-viewer/README.md) reads GitHub through a grant, with a step-by-step deploy guide; [examples/mailer](examples/mailer/README.md) drafts emails that are sent once their owner approves them; [examples/ask](examples/ask/README.md) asks a model and keeps the conversation; [examples/daybreak](examples/daybreak/README.md) finds time with friends, a circle per cell whose members are the people it is shared with; [examples/hn-reader](examples/hn-reader/README.md) reads Hacker News through a public API grant and summarises threads with a model.
 
 ## Run it
 
@@ -102,6 +102,7 @@ task k3s:identity-test            # identity, TLS and sharing
 task k3s:gatekeeper-test          # grants, the Gatekeeper, egress, vault and audit
 task k3s:approvals-test           # the approval queue, with Resend (RESEND_API_KEY, RESEND_FROM)
 task k3s:inference-test           # models through grants, routing, budgets and usage (OPENROUTER_API_KEY)
+task k3s:examples-test            # daybreak and hn-reader through the gateway
 ```
 
 Images are built by CI for amd64 and arm64: `ghcr.io/ipedrazas/kodo-{kernel,operator,gatekeeper}`, tagged `main` and `sha-<commit>` from main and `pr-<number>` from pull requests.
@@ -112,7 +113,7 @@ Images are built by CI for amd64 and arm64: `ghcr.io/ipedrazas/kodo-{kernel,oper
 | --- | --- |
 | `api/v1alpha1` | The `kodo.dev/v1alpha1` CRD types |
 | `cmd/operator`, `internal/controller` | The operator |
-| `cmd/gatekeeper`, `internal/gatekeeper` | The Gatekeeper: calls, approvals, the GitHub, email and inference providers, token vault, audit, egress proxy |
+| `cmd/gatekeeper`, `internal/gatekeeper` | The Gatekeeper: calls, approvals, the GitHub, email, web and inference providers, token vault, audit, egress proxy |
 | `internal/vault` | The vault interface and its OpenBao transit implementation |
 | `kernel/` | The kernel Worker, its tests and the gadget contract |
 | `examples/` | Example gadgets with their Blueprints |

@@ -21,3 +21,5 @@ configMapGenerator:
       - GATEKEEPER_EGRESS_ALLOW=t3.storage.dev:443,*.t3.storage.dev:443
       # deploy/inference; task k3s:inference.
       - INFERENCE_URL=http://kodo-inference.envoy-gateway-system.svc
+      # Public APIs gadgets may read (examples/hn-reader).
+      - GATEKEEPER_WEB_ALLOW=hn.algolia.com
