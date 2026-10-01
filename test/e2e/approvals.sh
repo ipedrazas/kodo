@@ -126,9 +126,10 @@ done; wait)
 ok=$(grep -c '^200$' <<<"$statuses" || true)
 conflict=$(grep -c '^409$' <<<"$statuses" || true)
 [[ $ok == 1 && $conflict == 11 ]] || fail "racing approves answered: $(sort <<<"$statuses" | uniq -c | xargs)"
-sleep 2
-answered=$(kubectl -n envoy-gateway-system logs -l gateway.envoyproxy.io/owning-gateway-name=kodo -c envoy --since-time="${raced}Z" |
-  python3 -c '
+# The gateway's access log arrives with a lag; read it until all twelve are in.
+answers() {
+  kubectl -n envoy-gateway-system logs -l gateway.envoyproxy.io/owning-gateway-name=kodo -c envoy --tail=-1 \
+    --since-time="${raced}Z" | python3 -c '
 import json, sys, collections
 first = sys.argv[1]
 by = collections.Counter()
@@ -137,7 +138,13 @@ for line in sys.stdin:
     except ValueError: continue
     if r.get("x-envoy-origin-path") == f"/gatekeeper/api/approvals/{first}/approve":
         by[(r["upstream_host"].split(":")[0], r["response_code"])] += 1
-print(" ".join(f"{h}:{c}x{n}" for (h, c), n in sorted(by.items())))' "$first")
+print(" ".join(f"{h}:{c}x{n}" for (h, c), n in sorted(by.items())))' "$first"
+}
+logged() {
+  answered=$(answers)
+  [[ $(tr ' ' '\n' <<<"$answered" | grep -o 'x[0-9]*$' | tr -d x | paste -sd+ - | bc) == 12 ]] 2>/dev/null
+}
+wait_for 60 "the gateway to log the twelve approves" logged
 replicas=$(tr ' ' '\n' <<<"$answered" | cut -d: -f1 | sort -u | grep -c . || true)
 ((replicas >= 2)) || fail "the approves did not reach two replicas: $answered"
 echo "12 approves through the gateway, answered by $replicas replicas ($answered): 1 ran the call, 11 got 409"
