@@ -1,0 +1,7 @@
+# The Gatekeeper, without its configuration: kubectl apply -k config/gatekeeper
+# needs the ConfigMap and Secrets listed in gatekeeper.yaml. An overlay such
+# as deploy/k3s/gatekeeper provides them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gatekeeper.yaml

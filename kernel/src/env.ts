@@ -17,4 +17,8 @@ export interface Env {
   OIDC_AUDIENCE?: string;
   OIDC_JWKS_URL?: string;
   ADMIN_TOKEN_SHA256?: string;
+  // Gatekeeper settings; see config.ts. Normally set at deploy time instead.
+  GATEKEEPER_URL?: string;
+  GATEKEEPER_KEY?: string;
+  FLEET_ID?: string;
 }

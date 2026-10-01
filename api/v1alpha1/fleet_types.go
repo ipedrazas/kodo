@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -51,6 +52,51 @@ type FleetSpec struct {
 	// it only the operator's admin token is accepted.
 	// +optional
 	Auth *AuthSpec `json:"auth,omitempty"`
+
+	// Gatekeeper connects the kernel to a Gatekeeper, which makes the external
+	// calls gadgets are granted. The operator gives the fleet a signing key
+	// and adds it to the Gatekeeper's trusted fleets. Without it, capability
+	// calls fail.
+	// +optional
+	Gatekeeper *GatekeeperRef `json:"gatekeeper,omitempty"`
+
+	// Egress, when set, denies the nodes every outbound connection except
+	// DNS, the fleet's own nodes, the Gatekeeper and the destinations listed
+	// in it: the bucket endpoint, the identity provider's keys and, later,
+	// the inference gateway.
+	// +optional
+	Egress *EgressSpec `json:"egress,omitempty"`
+}
+
+// GatekeeperRef locates the Gatekeeper a fleet calls.
+type GatekeeperRef struct {
+	// Namespace the Gatekeeper runs in.
+	// +kubebuilder:default=kodo-system
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+	// Service is the Gatekeeper's Service; its internal port is 8081.
+	// +kubebuilder:default=kodo-gatekeeper
+	// +optional
+	Service string `json:"service,omitempty"`
+	// TrustSecret is the Secret in Namespace that holds one key per trusted
+	// fleet, mounted into the Gatekeeper.
+	// +kubebuilder:default=kodo-gatekeeper-fleets
+	// +optional
+	TrustSecret string `json:"trustSecret,omitempty"`
+}
+
+// EgressSpec is the outbound traffic a fleet's nodes may make.
+type EgressSpec struct {
+	// Proxy sends the nodes' HTTPS traffic, which is their bucket traffic,
+	// through the Gatekeeper's egress proxy, which tunnels only to the hosts
+	// it allows. Use it when the bucket endpoint has no fixed addresses to
+	// allow. Needs gatekeeper.
+	// +optional
+	Proxy bool `json:"proxy,omitempty"`
+
+	// Allow are extra egress rules, in NetworkPolicy form.
+	// +optional
+	Allow []networkingv1.NetworkPolicyEgressRule `json:"allow,omitempty"`
 }
 
 // AuthSpec configures how the kernel verifies callers.

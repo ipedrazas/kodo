@@ -1,0 +1,20 @@
+# The Gatekeeper for hiddenfield.dev: its own Tigris bucket, Dex for users,
+# and an egress proxy that lets fleets reach only Tigris. task k3s:gatekeeper
+# creates the Secrets kodo-gatekeeper-bucket (from .buckets.env) and
+# kodo-gatekeeper-openbao (from .env) before applying this.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kodo-system
+resources:
+  - ../../../config/gatekeeper
+configMapGenerator:
+  - name: kodo-gatekeeper
+    literals:
+      - GATEKEEPER_BUCKET=kodo-dev-gatekeeper
+      - S3_ENDPOINT=https://t3.storage.dev
+      - AWS_REGION=auto
+      - OIDC_ISSUER=https://auth.hiddenfield.dev
+      - OIDC_AUDIENCE=kodo
+      - OIDC_JWKS_URL=http://dex.kodo-auth.svc:5556/keys
+      # Tigris answers on t3.storage.dev and on <bucket>.t3.storage.dev.
+      - GATEKEEPER_EGRESS_ALLOW=t3.storage.dev:443,*.t3.storage.dev:443

@@ -1,6 +1,7 @@
 version: "3"
 
-dotenv: [".env"]
+# .buckets.env holds the scoped bucket keys from deploy/k3s/bucket-keys.sh.
+dotenv: [".env", ".buckets.env"]
 
 vars:
   MODULE: github.com/ipedrazas/kodo
@@ -233,7 +234,9 @@ tasks:
       - test/e2e/cluster.sh
 
   k3s:up:
-    desc: The hiddenfield.dev environment on the k3s cluster (KERNEL_IMAGE and OPERATOR_IMAGE required)
+    desc: The hiddenfield.dev environment on the k3s cluster (KERNEL_IMAGE, OPERATOR_IMAGE and GATEKEEPER_IMAGE required)
+    requires:
+      vars: [KERNEL_IMAGE, OPERATOR_IMAGE, GATEKEEPER_IMAGE]
     cmds:
       - kubectl --context {{.K3S_CONTEXT}} apply --server-side -k deploy/platform
       - kubectl --context {{.K3S_CONTEXT}} -n cert-manager rollout status deploy/cert-manager-webhook --timeout=300s
@@ -247,13 +250,57 @@ tasks:
       - kubectl --context {{.K3S_CONTEXT}} apply -f deploy/k3s/dex.yaml
       - kubectl --context {{.K3S_CONTEXT}} apply -k config
       - kubectl --context {{.K3S_CONTEXT}} -n kodo-system set image deploy/kodo-operator operator={{.OPERATOR_IMAGE}}
+      - task: k3s:gatekeeper
+      # The fleet's key reaches only its own bucket, not the Gatekeeper's.
+      - task: k3s:bucket-keys
       - >-
+        set -a && . ./.buckets.env && set +a &&
         kubectl --context {{.K3S_CONTEXT}} -n kodo create secret generic bucket
-        --from-literal=AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" --from-literal=AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
+        --from-literal=AWS_ACCESS_KEY_ID="$FLEET_ACCESS_KEY_ID" --from-literal=AWS_SECRET_ACCESS_KEY="$FLEET_SECRET_ACCESS_KEY"
         --dry-run=client -o yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
       - sed "s#KERNEL_IMAGE#{{.KERNEL_IMAGE}}#" deploy/k3s/fleet.yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
       - kubectl --context {{.K3S_CONTEXT}} apply -f deploy/k3s/routes.yaml
       - kubectl --context {{.K3S_CONTEXT}} -n kodo wait fleet/kodo --for=condition=Ready --timeout=600s
+
+  k3s:bucket-keys:
+    desc: Create the scoped fleet and Gatekeeper bucket keys in .buckets.env, once (needs the admin key in .env)
+    status:
+      - test -f .buckets.env
+    cmds:
+      - deploy/k3s/bucket-keys.sh
+
+  openbao:setup:
+    desc: Prepare OpenBao for the Gatekeeper and write its AppRole credentials into .env (needs BAO_ADDR and an admin BAO_TOKEN)
+    cmds:
+      - deploy/openbao/setup.sh --env-file .env
+
+  k3s:gatekeeper:
+    desc: Deploy the Gatekeeper to kodo-system on the k3s cluster (GATEKEEPER_IMAGE required; OpenBao settings from .env)
+    requires:
+      vars: [GATEKEEPER_IMAGE]
+    cmds:
+      - task: k3s:bucket-keys
+      - >-
+        test -n "$OPENBAO_ADDR" && test -n "$OPENBAO_ROLE_ID" && test -n "$OPENBAO_SECRET_ID" ||
+        { echo "set OPENBAO_ADDR, OPENBAO_ROLE_ID and OPENBAO_SECRET_ID in .env: run task openbao:setup" >&2; exit 1; }
+      - kubectl --context {{.K3S_CONTEXT}} create namespace kodo-system --dry-run=client -o yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - >-
+        set -a && . ./.buckets.env && set +a &&
+        kubectl --context {{.K3S_CONTEXT}} -n kodo-system create secret generic kodo-gatekeeper-bucket
+        --from-literal=AWS_ACCESS_KEY_ID="$GATEKEEPER_ACCESS_KEY_ID" --from-literal=AWS_SECRET_ACCESS_KEY="$GATEKEEPER_SECRET_ACCESS_KEY"
+        --dry-run=client -o yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - >-
+        kubectl --context {{.K3S_CONTEXT}} -n kodo-system create secret generic kodo-gatekeeper-openbao
+        --from-literal=OPENBAO_ADDR="$OPENBAO_ADDR" --from-literal=OPENBAO_ROLE_ID="$OPENBAO_ROLE_ID"
+        --from-literal=OPENBAO_SECRET_ID="$OPENBAO_SECRET_ID" --dry-run=client -o yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - kubectl --context {{.K3S_CONTEXT}} apply -k deploy/k3s/gatekeeper
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo-system set image deploy/kodo-gatekeeper gatekeeper={{.GATEKEEPER_IMAGE}}
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo-system rollout status deploy/kodo-gatekeeper --timeout=300s
+
+  k3s:gatekeeper-test:
+    desc: Check the Gatekeeper read path end to end on hiddenfield.dev (GITHUB_TOKEN, or the gh CLI's token)
+    cmds:
+      - test/e2e/gatekeeper.sh
 
   k3s:identity-test:
     desc: Log in through the hiddenfield.dev gateway as the test users and check identity, TLS and sharing

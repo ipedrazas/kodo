@@ -15,6 +15,31 @@ export const isCapability = (s: unknown): s is string =>
   typeof s === "string" && s.length <= 256 && CAPABILITY.test(s);
 export const isDigest = (s: unknown): s is string => typeof s === "string" && DIGEST.test(s);
 
+// A grant is a capability with no wildcard: what one cell may actually use.
+export const isGrant = (s: unknown): s is string => isCapability(s) && !s.includes("*");
+
+// Whether a Blueprint's declared capability covers a grant. A `*` in the
+// declared resource stands for exactly one non-empty `/`-separated segment,
+// so `github:repo/acme/*:read` covers `github:repo/acme/api:read` but not
+// `github:repo/acme/api/x:read` or `github:repo/other/api:read`.
+export function covers(declared: string, grant: string): boolean {
+  if (!isCapability(declared) || !isGrant(grant)) return false;
+  const [d, g] = [split(declared), split(grant)];
+  if (d.provider !== g.provider || d.verb !== g.verb) return false;
+  const [ds, gs] = [d.resource.split("/"), g.resource.split("/")];
+  return ds.length === gs.length && ds.every((seg, i) => (seg === "*" ? gs[i] !== "" : seg === gs[i]));
+}
+
+function split(capability: string): { provider: string; resource: string; verb: string } {
+  const first = capability.indexOf(":");
+  const last = capability.lastIndexOf(":");
+  return {
+    provider: capability.slice(0, first),
+    resource: capability.slice(first + 1, last),
+    verb: capability.slice(last + 1),
+  };
+}
+
 // A new cell id: "c" and 12 base32 characters, a valid DNS label.
 export function newCellId(): string {
   const alphabet = "abcdefghijklmnopqrstuvwxyz234567";

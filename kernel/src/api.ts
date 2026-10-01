@@ -3,7 +3,7 @@ import type { Env } from "./env";
 import { sha256Hex } from "./http";
 import type { Caller } from "./identity";
 import type { CellRecord, ShareRole } from "./workspace";
-import { isCapability, isDigest, isName, isVersion } from "./names";
+import { covers, isCapability, isDigest, isGrant, isName, isVersion } from "./names";
 
 // The kernel API, served under /api/ on any host that is not a cell host.
 // Every call carries a verified caller: a user, or the operator's admin
@@ -26,6 +26,8 @@ import { isCapability, isDigest, isName, isVersion } from "./names";
 //   GET    /api/workspaces/:ws/cells/:id/shares
 //   PUT    /api/workspaces/:ws/cells/:id/shares/:email {role: viewer|editor}
 //   DELETE /api/workspaces/:ws/cells/:id/shares/:email
+//   GET    /api/workspaces/:ws/cells/:id/grants
+//   PUT    /api/workspaces/:ws/cells/:id/grants        {grants: [capability]}
 
 const MAX_BUNDLE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_QUOTA = 100;
@@ -133,6 +135,14 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
         }
         if (method === "DELETE") return result(await ws.unshare(c, email));
       }
+      if (d === "grants" && e === undefined && method === "GET") {
+        owner();
+        return json(200, { grants: cell.grants });
+      }
+      if (d === "grants" && e === undefined && method === "PUT") {
+        owner();
+        return setGrants(request, env, a, cell);
+      }
     }
   }
 
@@ -190,6 +200,22 @@ async function moveCell(request: Request, env: Env, workspace: string, cell: Cel
   const blueprint = await catalog(env).get(cell.blueprint, body.version);
   if (!blueprint) throw new ApiError(404, "blueprint version does not exist");
   return result(await env.WORKSPACE.getByName(workspace).moveCell(cell.id, blueprint));
+}
+
+// Grants are concrete capabilities, each covered by one the cell's Blueprint
+// version declares. The list replaces the cell's grants.
+async function setGrants(request: Request, env: Env, workspace: string, cell: CellRecord): Promise<Response> {
+  const grants = (await readJson(request)).grants;
+  if (!Array.isArray(grants) || !grants.every(isGrant)) {
+    throw new ApiError(400, "grants must be a list of <provider>:<resource>:<verb> without wildcards");
+  }
+  const blueprint = await catalog(env).get(cell.blueprint, cell.version);
+  if (!blueprint) throw new ApiError(409, "the cell's blueprint version no longer exists");
+  const undeclared = grants.filter((g) => !blueprint.capabilities.some((c) => covers(c, g)));
+  if (undeclared.length) {
+    throw new ApiError(400, `${cell.blueprint} ${cell.version} does not declare ${undeclared.join(", ")}`);
+  }
+  return result(await env.WORKSPACE.getByName(workspace).setGrants(cell.id, grants));
 }
 
 function result<T>(r: { ok: true; value: T } | { ok: false; status: number; error: string }, status = 200): Response {

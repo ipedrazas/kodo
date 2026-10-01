@@ -21,6 +21,8 @@ rules:
   - create
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - ""
@@ -97,6 +99,12 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - kodo.dev
+  resources:
+  - fleets/finalizers
+  verbs:
+  - update
 - apiGroups:
   - networking.k8s.io
   resources:

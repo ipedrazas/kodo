@@ -1,0 +1,16 @@
+# Blueprint repo-viewer 1.0.0. It declares that it may read any GitHub
+# repository; each cell's owner grants the specific ones it can actually
+# read, e.g. github:repo/acme/api:read.
+apiVersion: kodo.dev/v1alpha1
+kind: Blueprint
+metadata:
+  name: repo-viewer-1.0.0
+spec:
+  fleet: kodo
+  blueprint: repo-viewer
+  version: 1.0.0
+  source:
+    name: repo-viewer
+    key: gadget.js
+  capabilities:
+    - github:repo/*/*:read

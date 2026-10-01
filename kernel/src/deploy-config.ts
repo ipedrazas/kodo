@@ -6,4 +6,7 @@ export const DEPLOY_CONFIG = {
   audience: "",
   jwksUrl: "",
   adminTokenSha256: "",
+  gatekeeperUrl: "",
+  gatekeeperKey: "",
+  fleet: "",
 };

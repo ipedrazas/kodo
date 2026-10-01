@@ -4,9 +4,12 @@
 // Paths given to publish() are relative to the kernel directory.
 //
 // The harness plays the identity provider: it serves a JWKS and mints ID
-// tokens for test users, and holds an admin token.
+// tokens for test users, and holds an admin token. With `gatekeeper` set it
+// also plays the Gatekeeper: it checks each call's signature, records it, and
+// answers with `gatekeeper(call)` if that is a function ({status, headers,
+// body}), or else 200 with the call it received as the body.
 import { spawn } from "node:child_process";
-import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
+import { createHash, createHmac, generateKeyPairSync, randomBytes, sign, timingSafeEqual } from "node:crypto";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
@@ -21,9 +24,11 @@ export const AUDIENCE = "kodo";
 // Test users: the subject is the name, the email is <name>@test.
 export const user = (name) => ({ sub: `sub-${name}`, email: `${name}@test` });
 
-export async function startKernel({ vars = {}, env = {} } = {}) {
+export async function startKernel({ vars = {}, env = {}, gatekeeper = false } = {}) {
   const idp = await startIdentityProvider();
   const adminToken = randomBytes(16).toString("hex");
+  const gk = gatekeeper ? await startGatekeeper(typeof gatekeeper === "function" ? gatekeeper : undefined) : null;
+  if (gk) vars = { GATEKEEPER_URL: gk.url, GATEKEEPER_KEY: gk.key, FLEET_ID: gk.fleet, ...vars };
 
   const dir = await mkdtemp(join(tmpdir(), "kodo-kernel-"));
   await cp(join(kernel, "wrangler.jsonc"), join(dir, "wrangler.jsonc"));
@@ -59,6 +64,7 @@ export async function startKernel({ vars = {}, env = {} } = {}) {
     port,
     idp,
     adminToken,
+    gatekeeper: gk,
     logs: () => logs.join(""),
     // A request to any host, by default as alice.
     request: (host, path = "/", { as = "alice", headers = {}, ...options } = {}) =>
@@ -103,6 +109,7 @@ export async function startKernel({ vars = {}, env = {} } = {}) {
       child.kill("SIGTERM");
       await new Promise((r) => child.once("exit", r));
       idp.close();
+      gk?.close();
       await rm(dir, { recursive: true, force: true });
     },
   };
@@ -122,6 +129,53 @@ export async function startKernel({ vars = {}, env = {} } = {}) {
     }
     await new Promise((r) => setTimeout(r, 250));
   }
+}
+
+// A stand-in Gatekeeper. Calls with a bad signature are answered 401 and
+// counted in `rejected`; good ones are kept in `calls`.
+const echo = (call) => ({ status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify(call) });
+
+async function startGatekeeper(answer = echo) {
+  const key = randomBytes(32).toString("hex");
+  const fleet = "test/kodo";
+  const calls = [];
+  let rejected = 0;
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const body = Buffer.concat(chunks).toString();
+      const ts = req.headers["x-kodo-timestamp"];
+      const want = Buffer.from("v1=" + createHmac("sha256", key).update(`${ts}.${body}`).digest("hex"));
+      const got = Buffer.from(String(req.headers["x-kodo-signature"] ?? ""));
+      const fresh = Math.abs(Date.now() / 1000 - Number(ts)) < 60;
+      if (req.url !== "/v1/calls" || req.headers["x-kodo-fleet"] !== fleet || !fresh ||
+          got.length !== want.length || !timingSafeEqual(got, want)) {
+        rejected++;
+        res.statusCode = 401;
+        res.end("bad signature\n");
+        return;
+      }
+      const call = JSON.parse(body);
+      calls.push(call);
+      const a = answer(call);
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({
+        status: a.status,
+        headers: { "x-kodo-decision": "allowed", ...a.headers },
+        body: Buffer.from(a.body ?? "").toString("base64"),
+      }));
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    key,
+    fleet,
+    calls,
+    rejected: () => rejected,
+    close: () => server.close(),
+  };
 }
 
 // A minimal OIDC signer: an RSA key served as a JWKS, and ID tokens for it.
