@@ -4,7 +4,7 @@ The kodo operator runs fleets and keeps their registries in step with Kubernetes
 
 | Kind | Becomes |
 | --- | --- |
-| `Fleet` | A celld StatefulSet, a public Service, a headless peers Service, a NetworkPolicy, and a Job that deploys the kernel image to the fleet's bucket |
+| `Fleet` | A celld StatefulSet, a public Service, a headless peers Service, NetworkPolicies, a Job that deploys the kernel image to the fleet's bucket, and, with a Gatekeeper, the fleet's signing key and its entry in the Gatekeeper's trusted fleets |
 | `Blueprint` | One published Blueprint version in the fleet's catalog, as `POST /api/bundles` and `PUT /api/blueprints/:name/:version` |
 | `Workspace` | A workspace with a quota, as `PUT /api/workspaces/:name`; its status shows the cell count |
 
@@ -42,6 +42,13 @@ spec:
     issuer: https://auth.example.com
     audience: kodo                        # the OIDC client id the gateway uses
     jwksURL: http://dex.auth.svc:5556/keys  # optional; defaults to <issuer>/keys
+  gatekeeper: {}                          # optional; the defaults are:
+    # namespace: kodo-system
+    # service: kodo-gatekeeper
+    # trustSecret: kodo-gatekeeper-fleets
+  egress:                                 # optional; default-deny egress for the nodes
+    proxy: true                           # HTTPS (the bucket) through the Gatekeeper's egress proxy
+    allow: []                             # extra NetworkPolicy egress rules, e.g. the IdP's keys
 ```
 
 - **Admin token**: the operator creates `<fleet>-admin-token` (key `token`) once and deploys the kernel with its hash. It calls the kernel API with it, and so can anyone who can read the Secret.
@@ -51,6 +58,8 @@ spec:
 - **celld changes** stop the fleet: mixed celld versions cannot share a fleet, so the operator scales the StatefulSet to zero on the old image, waits until every node pod is gone, then starts the new image. The fleet serves nothing in between: about 20 s on kind and 36 s on the k3s cluster under gVisor. The `Upgrading` condition is true until every node runs the new image.
 - **Shutdown**: a stopping node keeps serving for 5 s so Services stop routing to it, then gets 60 s for celld's handoff, above its 40 s bound.
 - **The internal listener** (port 8081: the peer protocol and celld's unauthenticated operator API) accepts connections only from the fleet's own nodes. The cluster's network plugin must enforce NetworkPolicy.
+- **Gatekeeper**: the operator creates `<fleet>-gatekeeper-key` once, adds it to the Gatekeeper's trust Secret as `<namespace>.<fleet>`, and deploys the kernel with the Gatekeeper's URL, the key and the fleet's name. A finalizer removes the entry when the Fleet is deleted or drops `gatekeeper`.
+- **Egress**: with `egress` set, `<fleet>-egress` lets the nodes reach only DNS, their own fleet, the Gatekeeper (calls on 8081, egress proxy on 8082) and the `allow` rules. With `proxy: true` the nodes get `HTTPS_PROXY` pointing at the egress proxy, which tunnels only to the hosts in its `GATEKEEPER_EGRESS_ALLOW`; use it when the bucket endpoint has no fixed addresses to put in an `ipBlock`, as with Tigris. Without `egress` the nodes' outbound traffic is not restricted.
 - **Deleting a Fleet** removes its pods, Services, Jobs and node volumes, and leaves the bucket untouched; a new Fleet on the same bucket finds every cell as it was.
 
 ## Blueprint
@@ -75,6 +84,20 @@ spec:
 ```
 
 The workspace takes the resource's name, which must be one DNS label. Deleting the resource leaves the workspace and its cells in the fleet.
+
+## Gatekeeper
+
+The Gatekeeper ([`cmd/gatekeeper`](../cmd/gatekeeper/main.go)) runs beside the operator in `kodo-system`, outside every fleet, from [`config/gatekeeper`](gatekeeper/gatekeeper.yaml). It serves three ports:
+
+| Port | Who | What |
+| --- | --- | --- |
+| 8080 | Users, through the gateway at `app.<domain>/gatekeeper/` | A page and API to connect and disconnect accounts; checks the user's ID token |
+| 8081 | Fleet nodes only (NetworkPolicy) | `POST /v1/calls`: a kernel's signed capability call |
+| 8082 | Fleet nodes only (NetworkPolicy) | The egress proxy: `CONNECT` to allowed hosts |
+
+It needs a ConfigMap `kodo-gatekeeper` (bucket, OIDC and egress settings), a Secret `kodo-gatekeeper-bucket` with credentials for a bucket no fleet can read, and a Secret `kodo-gatekeeper-openbao` with `OPENBAO_ADDR`, `OPENBAO_ROLE_ID` and `OPENBAO_SECRET_ID` from [`deploy/openbao/setup.sh`](../deploy/openbao/README.md). [`deploy/k3s/gatekeeper`](../deploy/k3s/gatekeeper/kustomization.yaml) is the hiddenfield.dev overlay.
+
+In its bucket it keeps `vault/<user>/<provider>.json` (the OpenBao transit ciphertext of a user's token, bound to that user and provider) and `audit/<yyyy>/<mm>/<dd>/<time>-<id>.json` (one object per decision, created with a conditional write so none is overwritten). A call is recorded before it is made; if the record cannot be written, the call is refused.
 
 ## How the operator reaches the kernel
 

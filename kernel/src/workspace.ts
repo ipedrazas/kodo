@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { BlueprintVersion } from "./catalog";
 import type { Env } from "./env";
-import { newCellId } from "./names";
+import { covers, newCellId } from "./names";
 
 export type ShareRole = "viewer" | "editor";
 
@@ -17,6 +17,9 @@ export interface CellRecord {
   owner: Owner;
   // Email -> role for everyone the owner has shared the cell with.
   shares: Record<string, ShareRole>;
+  // Capabilities the owner has granted this cell, each covered by one its
+  // Blueprint version declares.
+  grants: string[];
   createdAt: number;
 }
 
@@ -54,6 +57,11 @@ export class Workspace extends DurableObject<Env> {
       role TEXT NOT NULL,
       PRIMARY KEY (cell, email)
     )`);
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS grants (
+      cell TEXT NOT NULL,
+      capability TEXT NOT NULL,
+      PRIMARY KEY (cell, capability)
+    )`);
   }
 
   configure(name: string, quota: number): WorkspaceInfo {
@@ -79,6 +87,7 @@ export class Workspace extends DurableObject<Env> {
       version: blueprint.version,
       owner,
       shares: {},
+      grants: [],
       createdAt: Date.now(),
     };
     this.ctx.storage.sql.exec(
@@ -91,7 +100,7 @@ export class Workspace extends DurableObject<Env> {
       owner.email,
     );
     try {
-      await this.env.CELL.getByName(record.id).bind({ workspace: info.name, blueprint, owner, shares: {} });
+      await this.env.CELL.getByName(record.id).bind({ workspace: info.name, blueprint, owner, shares: {}, grants: [] });
     } catch (err) {
       this.ctx.storage.sql.exec("DELETE FROM cells WHERE id = ?", record.id);
       throw err;
@@ -103,6 +112,12 @@ export class Workspace extends DurableObject<Env> {
     const shares = new Map<string, Record<string, ShareRole>>();
     for (const s of this.ctx.storage.sql.exec<{ cell: string; email: string; role: ShareRole }>("SELECT * FROM shares")) {
       shares.set(s.cell, { ...shares.get(s.cell), [s.email]: s.role });
+    }
+    const grants = new Map<string, string[]>();
+    for (const g of this.ctx.storage.sql.exec<{ cell: string; capability: string }>(
+      "SELECT * FROM grants ORDER BY capability",
+    )) {
+      grants.set(g.cell, [...(grants.get(g.cell) ?? []), g.capability]);
     }
     return this.ctx.storage.sql
       .exec<{
@@ -120,6 +135,7 @@ export class Workspace extends DurableObject<Env> {
         version: r.version,
         owner: { user: r.owner_user, email: r.owner_email },
         shares: shares.get(r.id) ?? {},
+        grants: grants.get(r.id) ?? [],
         createdAt: r.created_at,
       }));
   }
@@ -129,7 +145,8 @@ export class Workspace extends DurableObject<Env> {
   }
 
   // Moves a cell to another version of the same Blueprint. The gadget keeps
-  // its storage; the new code runs from its next call.
+  // its storage; the new code runs from its next call. Grants the new
+  // version does not declare are dropped.
   async moveCell(id: string, blueprint: BlueprintVersion): Promise<WorkspaceResult<CellRecord>> {
     const info = this.info();
     const cell = this.getCell(id);
@@ -137,9 +154,27 @@ export class Workspace extends DurableObject<Env> {
     if (cell.blueprint !== blueprint.name) {
       return fail(400, `cell runs ${cell.blueprint}, not ${blueprint.name}`);
     }
-    await this.env.CELL.getByName(id).bind({ workspace: info.name, blueprint, owner: cell.owner, shares: cell.shares });
+    const grants = cell.grants.filter((g) => blueprint.capabilities.some((c) => covers(c, g)));
+    await this.env.CELL.getByName(id).bind({
+      workspace: info.name,
+      blueprint,
+      owner: cell.owner,
+      shares: cell.shares,
+      grants,
+    });
     this.ctx.storage.sql.exec("UPDATE cells SET version = ? WHERE id = ?", blueprint.version, id);
-    return { ok: true, value: { ...cell, version: blueprint.version } };
+    this.writeGrants(id, grants);
+    return { ok: true, value: { ...cell, version: blueprint.version, grants } };
+  }
+
+  // Replaces the capabilities granted to a cell. The caller has checked them
+  // against the cell's Blueprint version.
+  async setGrants(id: string, grants: string[]): Promise<WorkspaceResult<CellRecord>> {
+    if (!this.getCell(id)) return fail(404, "cell does not exist in this workspace");
+    this.writeGrants(id, grants);
+    const cell = this.getCell(id)!;
+    await this.env.CELL.getByName(id).setGrants(cell.grants);
+    return { ok: true, value: cell };
   }
 
   // Shares a cell with a user by email, or changes their role.
@@ -162,7 +197,13 @@ export class Workspace extends DurableObject<Env> {
     await this.env.CELL.getByName(id).unbind();
     this.ctx.storage.sql.exec("DELETE FROM cells WHERE id = ?", id);
     this.ctx.storage.sql.exec("DELETE FROM shares WHERE cell = ?", id);
+    this.ctx.storage.sql.exec("DELETE FROM grants WHERE cell = ?", id);
     return { ok: true, value: null };
+  }
+
+  private writeGrants(id: string, grants: string[]): void {
+    this.ctx.storage.sql.exec("DELETE FROM grants WHERE cell = ?", id);
+    for (const g of new Set(grants)) this.ctx.storage.sql.exec("INSERT INTO grants VALUES (?, ?)", id, g);
   }
 
   private async pushShares(id: string): Promise<WorkspaceResult<CellRecord>> {

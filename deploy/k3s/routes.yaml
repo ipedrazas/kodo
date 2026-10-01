@@ -1,5 +1,5 @@
 # app.hiddenfield.dev (the API) and every cell hostname go to the kodo fleet,
-# behind an OIDC login. One session cookie on .hiddenfield.dev covers the app
+# and app.hiddenfield.dev/gatekeeper/ to the Gatekeeper, behind an OIDC login. One session cookie on .hiddenfield.dev covers the app
 # and every cell; the gateway forwards the ID token to the kernel in
 # x-kodo-identity, and the kernel verifies it and strips it, and the session
 # cookies, before anything reaches a gadget.
@@ -34,6 +34,9 @@ spec:
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
       name: kodo
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kodo-gatekeeper
   oidc:
     provider:
       issuer: https://auth.hiddenfield.dev
@@ -51,3 +54,42 @@ spec:
     forwardIDToken:
       header: x-kodo-identity
     refreshToken: true
+---
+# The Gatekeeper's page and API, where users connect accounts. Only on the
+# app host: on a cell host a gadget's own page would share its origin.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kodo-gatekeeper
+  namespace: kodo
+spec:
+  parentRefs:
+    - name: kodo
+      namespace: kodo-gateway
+      sectionName: https
+  hostnames:
+    - app.hiddenfield.dev
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /gatekeeper/
+      backendRefs:
+        - name: kodo-gatekeeper
+          namespace: kodo-system
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: kodo-routes
+  namespace: kodo-system
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: kodo
+  to:
+    - group: ""
+      kind: Service
+      name: kodo-gatekeeper

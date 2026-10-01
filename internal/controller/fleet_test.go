@@ -227,3 +227,118 @@ func TestCelldUpgradeStopsEveryNodeFirst(t *testing.T) {
 		t.Fatalf("last step: replicas %d image %s, want 3 on the new image", *got.Spec.Replicas, got.Spec.Template.Spec.Containers[0].Image)
 	}
 }
+
+func gatekeeperFleet() *kodov1.Fleet {
+	f := testFleet()
+	f.Spec.Gatekeeper = &kodov1.GatekeeperRef{}
+	return f
+}
+
+func TestGatekeeperTrustsTheFleetUntilItIsDeleted(t *testing.T) {
+	s := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gatekeeperFleet()).WithStatusSubresource(&kodov1.Fleet{}).Build()
+	reconcileFleet(t, c, s)
+	ctx := context.Background()
+
+	var own, trust corev1.Secret
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "kodo", Name: "kodo-gatekeeper-key"}, &own); err != nil {
+		t.Fatal(err)
+	}
+	if len(own.Data["key"]) != 64 {
+		t.Fatalf("fleet key is %d bytes", len(own.Data["key"]))
+	}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "kodo-system", Name: "kodo-gatekeeper-fleets"}, &trust); err != nil {
+		t.Fatal(err)
+	}
+	if string(trust.Data["kodo.kodo"]) != string(own.Data["key"]) {
+		t.Error("the Gatekeeper's trust Secret does not hold the fleet's key")
+	}
+
+	// A second reconcile keeps the key.
+	reconcileFleet(t, c, s)
+	var again corev1.Secret
+	_ = c.Get(ctx, client.ObjectKey{Namespace: "kodo", Name: "kodo-gatekeeper-key"}, &again)
+	if string(again.Data["key"]) != string(own.Data["key"]) {
+		t.Error("the fleet key changed on reconcile")
+	}
+
+	env := map[string]corev1.EnvVar{}
+	var jobs batchv1.JobList
+	_ = c.List(ctx, &jobs)
+	for _, e := range jobs.Items[0].Spec.Template.Spec.Containers[0].Env {
+		env[e.Name] = e
+	}
+	if env["GATEKEEPER_URL"].Value != "http://kodo-gatekeeper.kodo-system.svc:8081" || env["FLEET_ID"].Value != "kodo/kodo" ||
+		env["GATEKEEPER_KEY"].ValueFrom.SecretKeyRef.Name != "kodo-gatekeeper-key" {
+		t.Errorf("kernel Job gatekeeper env: %v", env)
+	}
+
+	var fleet kodov1.Fleet
+	_ = c.Get(ctx, client.ObjectKey{Namespace: "kodo", Name: "kodo"}, &fleet)
+	if err := c.Delete(ctx, &fleet); err != nil {
+		t.Fatal(err)
+	}
+	reconcileFleet(t, c, s)
+	_ = c.Get(ctx, client.ObjectKey{Namespace: "kodo-system", Name: "kodo-gatekeeper-fleets"}, &trust)
+	if _, ok := trust.Data["kodo.kodo"]; ok {
+		t.Error("a deleted Fleet is still trusted")
+	}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "kodo", Name: "kodo"}, &fleet); err == nil {
+		t.Error("the Fleet's finalizer was not removed")
+	}
+}
+
+func TestEgressPolicy(t *testing.T) {
+	if desiredEgressPolicy(testFleet()) != nil {
+		t.Fatal("a Fleet without egress got an egress policy")
+	}
+	f := gatekeeperFleet()
+	bucket := networkingv1.NetworkPolicyEgressRule{To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "203.0.113.7/32"}}}}
+	f.Spec.Egress = &kodov1.EgressSpec{Allow: []networkingv1.NetworkPolicyEgressRule{bucket}}
+	p := desiredEgressPolicy(f)
+	if len(p.Spec.PolicyTypes) != 1 || p.Spec.PolicyTypes[0] != networkingv1.PolicyTypeEgress {
+		t.Errorf("policy types %v", p.Spec.PolicyTypes)
+	}
+	if len(p.Spec.Egress) != 4 {
+		t.Fatalf("want DNS, peers, Gatekeeper and the bucket; got %d rules", len(p.Spec.Egress))
+	}
+	gk := p.Spec.Egress[2]
+	if gk.To[0].NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "kodo-system" ||
+		gk.Ports[0].Port.IntValue() != 8081 || gk.Ports[1].Port.IntValue() != 8082 {
+		t.Errorf("gatekeeper rule %+v", gk)
+	}
+	nodeEnv := func(f *kodov1.Fleet) map[string]string {
+		env := map[string]string{}
+		for _, e := range desiredStatefulSet(f).Spec.Template.Spec.Containers[0].Env {
+			env[e.Name] = e.Value
+		}
+		return env
+	}
+	if _, ok := nodeEnv(f)["HTTPS_PROXY"]; ok {
+		t.Error("nodes use the egress proxy without egress.proxy")
+	}
+	f.Spec.Egress.Proxy = true
+	if got := nodeEnv(f)["HTTPS_PROXY"]; got != "http://kodo-gatekeeper.kodo-system.svc:8082" {
+		t.Errorf("HTTPS_PROXY %q", got)
+	}
+	if p.Spec.Egress[3].To[0].IPBlock.CIDR != "203.0.113.7/32" {
+		t.Errorf("extra rule not kept: %+v", p.Spec.Egress[3])
+	}
+
+	s := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(f).WithStatusSubresource(&kodov1.Fleet{}).Build()
+	reconcileFleet(t, c, s)
+	ctx := context.Background()
+	key := client.ObjectKey{Namespace: "kodo", Name: "kodo-egress"}
+	if err := c.Get(ctx, key, &networkingv1.NetworkPolicy{}); err != nil {
+		t.Fatal(err)
+	}
+	var fleet kodov1.Fleet
+	_ = c.Get(ctx, client.ObjectKey{Namespace: "kodo", Name: "kodo"}, &fleet)
+	fleet.Spec.Egress = nil
+	_ = c.Update(ctx, &fleet)
+	reconcileFleet(t, c, s)
+	if err := c.Get(ctx, key, &networkingv1.NetworkPolicy{}); err == nil {
+		t.Error("egress policy kept after the Fleet dropped egress")
+	}
+}

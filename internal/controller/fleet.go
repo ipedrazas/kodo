@@ -45,11 +45,20 @@ type FleetReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kodo.dev,resources=fleets/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
+
+// trustFinalizer removes a deleted Fleet's key from the Gatekeeper's trusted
+// fleets, which live in another namespace and so cannot be owned by it.
+const trustFinalizer = "kodo.dev/gatekeeper-trust"
 
 func (r *FleetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var fleet kodov1.Fleet
 	if err := r.Get(ctx, req.NamespacedName, &fleet); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if !fleet.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, r.untrust(ctx, &fleet)
 	}
 
 	for _, obj := range []client.Object{desiredService(&fleet), desiredPeersService(&fleet), desiredNetworkPolicy(&fleet)} {
@@ -57,8 +66,14 @@ func (r *FleetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			return ctrl.Result{}, err
 		}
 	}
+	if err := r.reconcileEgress(ctx, &fleet); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	if err := r.ensureAdminToken(ctx, &fleet); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileGatekeeper(ctx, &fleet); err != nil {
 		return ctrl.Result{}, err
 	}
 	sts, requeue, err := r.reconcileNodes(ctx, &fleet)
@@ -123,6 +138,92 @@ func (r *FleetReconciler) ensureAdminToken(ctx context.Context, fleet *kodov1.Fl
 		return err
 	}
 	return r.Create(ctx, &secret)
+}
+
+// reconcileEgress applies the egress NetworkPolicy, or removes it when the
+// Fleet no longer sets egress.
+func (r *FleetReconciler) reconcileEgress(ctx context.Context, fleet *kodov1.Fleet) error {
+	if policy := desiredEgressPolicy(fleet); policy != nil {
+		return r.apply(ctx, fleet, policy)
+	}
+	stale := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: egressPolicyName(fleet), Namespace: fleet.Namespace}}
+	return client.IgnoreNotFound(r.Delete(ctx, stale))
+}
+
+// reconcileGatekeeper gives a Fleet with a Gatekeeper its signing key, once,
+// and makes sure the Gatekeeper trusts it. A Fleet that drops its Gatekeeper
+// is removed from the trusted fleets.
+func (r *FleetReconciler) reconcileGatekeeper(ctx context.Context, fleet *kodov1.Fleet) error {
+	g := gatekeeper(fleet)
+	if g == nil {
+		return r.untrust(ctx, fleet)
+	}
+	if !controllerutil.ContainsFinalizer(fleet, trustFinalizer) {
+		controllerutil.AddFinalizer(fleet, trustFinalizer)
+		if err := r.Update(ctx, fleet); err != nil {
+			return err
+		}
+	}
+
+	key := client.ObjectKey{Namespace: fleet.Namespace, Name: gatekeeperKeySecretName(fleet)}
+	var own corev1.Secret
+	err := r.Get(ctx, key, &own)
+	if apierrors.IsNotFound(err) {
+		k := make([]byte, 32)
+		if _, err := rand.Read(k); err != nil {
+			return err
+		}
+		own = corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: nodeLabels(fleet)},
+			Data:       map[string][]byte{"key": []byte(hex.EncodeToString(k))},
+		}
+		if err := controllerutil.SetControllerReference(fleet, &own, r.Scheme); err != nil {
+			return err
+		}
+		err = r.Create(ctx, &own)
+	}
+	if err != nil {
+		return err
+	}
+
+	trust := corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: g.TrustSecret, Namespace: g.Namespace}}
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, &trust, func() error {
+		if trust.Data == nil {
+			trust.Data = map[string][]byte{}
+		}
+		trust.Data[trustKey(fleet)] = own.Data["key"]
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("adding fleet %s to the Gatekeeper's trusted fleets: %w", fleetID(fleet), err)
+	}
+	return nil
+}
+
+// untrust removes the Fleet from every Gatekeeper trust Secret it may be in
+// and drops the finalizer.
+func (r *FleetReconciler) untrust(ctx context.Context, fleet *kodov1.Fleet) error {
+	if !controllerutil.ContainsFinalizer(fleet, trustFinalizer) {
+		return nil
+	}
+	g := gatekeeper(fleet)
+	if g == nil {
+		g = gatekeeper(&kodov1.Fleet{Spec: kodov1.FleetSpec{Gatekeeper: &kodov1.GatekeeperRef{}}})
+	}
+	var trust corev1.Secret
+	err := r.Get(ctx, client.ObjectKey{Namespace: g.Namespace, Name: g.TrustSecret}, &trust)
+	if err == nil {
+		if _, ok := trust.Data[trustKey(fleet)]; ok {
+			delete(trust.Data, trustKey(fleet))
+			if err := r.Update(ctx, &trust); err != nil {
+				return err
+			}
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return err
+	}
+	controllerutil.RemoveFinalizer(fleet, trustFinalizer)
+	return r.Update(ctx, fleet)
 }
 
 // nodeStep is what the celld upgrade needs next.

@@ -2,6 +2,9 @@
 # Deploys the kernel with its identity settings from the environment:
 #   OIDC_ISSUER, OIDC_AUDIENCE, OIDC_JWKS_URL   the identity provider
 #   KERNEL_ADMIN_TOKEN                          the operator's admin token
+# and, for capability calls, the Gatekeeper:
+#   GATEKEEPER_URL, GATEKEEPER_KEY, FLEET_ID    where it is, the fleet's
+#                                               signing key, <namespace>/<fleet>
 # The settings are written into src/deploy-config.ts of a copy of the kernel,
 # then `celld deploy` runs on the copy with any extra arguments (the bucket
 # flags; celld also reads CELLD_BUCKET, S3_ENDPOINT and AWS_*).
@@ -28,6 +31,9 @@ export const DEPLOY_CONFIG = {
   audience: $(quote "${OIDC_AUDIENCE:-}"),
   jwksUrl: $(quote "${OIDC_JWKS_URL:-}"),
   adminTokenSha256: $(quote "$hash"),
+  gatekeeperUrl: $(quote "${GATEKEEPER_URL:-}"),
+  gatekeeperKey: $(quote "${GATEKEEPER_KEY:-}"),
+  fleet: $(quote "${FLEET_ID:-}"),
 };
 TS
 exec celld deploy "$work" "$@"

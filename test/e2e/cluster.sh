@@ -2,7 +2,8 @@
 # Runs operator.sh on an existing cluster with published images, using the
 # Tigris bucket in .env: creates the bucket Secret, and either installs the
 # operator in the cluster from OPERATOR_IMAGE or runs it from source for the
-# duration. Each run uses a fresh prefix in the bucket.
+# duration. Each run uses a fresh prefix in the bucket, removed afterwards
+# with the test namespace unless KEEP=1.
 # usage: CONTEXT=default KERNEL_IMAGE=... KERNEL_IMAGE_2=... [OPERATOR_IMAGE=...] cluster.sh
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -35,5 +36,12 @@ else
   trap 'kill $operator' EXIT
 fi
 
-BUCKET=${BUCKET:-kodo-dev/e2e-$(date +%s)} BUCKET_ENDPOINT=$AWS_ENDPOINT_URL_S3 BUCKET_REGION=${AWS_REGION:-auto} \
-  test/e2e/operator.sh
+export BUCKET=${BUCKET:-kodo-dev/e2e-$(date +%s)}
+BUCKET_ENDPOINT=$AWS_ENDPOINT_URL_S3 BUCKET_REGION=${AWS_REGION:-auto} test/e2e/operator.sh
+# The run's prefix is test data: remove it, and the test's namespace, unless
+# KEEP=1.
+if [[ -z ${KEEP:-} ]]; then
+  kubectl --context "$CONTEXT" delete namespace "$NS" --wait=true >/dev/null
+  aws s3 rm "s3://$BUCKET/" --recursive --only-show-errors
+  echo "removed s3://$BUCKET/ and namespace $NS"
+fi

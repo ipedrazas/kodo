@@ -44,3 +44,7 @@ test/e2e/results/
 
 # Identity test credentials
 .auth.env
+
+# Scoped bucket keys (deploy/k3s/bucket-keys.sh)
+.buckets.env
+.buckets.env.tmp

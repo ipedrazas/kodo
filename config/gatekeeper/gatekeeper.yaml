@@ -1,0 +1,170 @@
+# The Gatekeeper in kodo-system. It needs, in the same namespace:
+#   ConfigMap kodo-gatekeeper         GATEKEEPER_BUCKET, S3_ENDPOINT, AWS_REGION,
+#                                     OIDC_ISSUER, OIDC_AUDIENCE, OIDC_JWKS_URL,
+#                                     GATEKEEPER_EGRESS_ALLOW (and any other
+#                                     setting in cmd/gatekeeper/main.go)
+#   Secret kodo-gatekeeper-bucket     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY for
+#                                     a bucket no fleet can read
+#   Secret kodo-gatekeeper-openbao    OPENBAO_ADDR, OPENBAO_ROLE_ID and
+#                                     OPENBAO_SECRET_ID, from deploy/openbao/setup.sh
+# The operator writes Secret kodo-gatekeeper-fleets, one key per Fleet that
+# names this Gatekeeper; it is mounted, so new fleets are trusted without a
+# restart once the kubelet refreshes the mount.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kodo-gatekeeper
+  namespace: kodo-system
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kodo-gatekeeper
+  namespace: kodo-system
+  labels:
+    app.kubernetes.io/name: kodo-gatekeeper
+spec:
+  # Stateless: every replica serves any call.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kodo-gatekeeper
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kodo-gatekeeper
+    spec:
+      serviceAccountName: kodo-gatekeeper
+      # Set to true, and OPENBAO_AUTH=kubernetes, to log in to OpenBao with
+      # the pod's identity instead of an AppRole.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: kodo-gatekeeper
+      containers:
+        - name: gatekeeper
+          image: ghcr.io/ipedrazas/kodo-gatekeeper:main
+          envFrom:
+            - configMapRef:
+                name: kodo-gatekeeper
+            - secretRef:
+                name: kodo-gatekeeper-bucket
+          env:
+            - name: OPENBAO_ADDR
+              valueFrom:
+                secretKeyRef:
+                  name: kodo-gatekeeper-openbao
+                  key: OPENBAO_ADDR
+            - name: OPENBAO_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: kodo-gatekeeper-openbao
+                  key: OPENBAO_ROLE_ID
+            # Read on every login, so a rotated secret ID needs no restart.
+            - name: OPENBAO_SECRET_ID_FILE
+              value: /etc/kodo/openbao/OPENBAO_SECRET_ID
+            - name: GATEKEEPER_TRUST_DIR
+              value: /etc/kodo/fleets
+          ports:
+            - name: public
+              containerPort: 8080
+            - name: internal
+              containerPort: 8081
+            - name: egress
+              containerPort: 8082
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: public
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: public
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: fleets
+              mountPath: /etc/kodo/fleets
+              readOnly: true
+            - name: openbao
+              mountPath: /etc/kodo/openbao
+              readOnly: true
+      volumes:
+        - name: fleets
+          secret:
+            secretName: kodo-gatekeeper-fleets
+            # Created by the operator when the first Fleet names this Gatekeeper.
+            optional: true
+        - name: openbao
+          secret:
+            secretName: kodo-gatekeeper-openbao
+            items:
+              - key: OPENBAO_SECRET_ID
+                path: OPENBAO_SECRET_ID
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kodo-gatekeeper
+  namespace: kodo-system
+  labels:
+    app.kubernetes.io/name: kodo-gatekeeper
+spec:
+  selector:
+    app.kubernetes.io/name: kodo-gatekeeper
+  ports:
+    # Users, through the gateway: app.<domain>/gatekeeper/.
+    - name: public
+      port: 80
+      targetPort: public
+    # Kernels: POST /v1/calls, signed with their fleet's key.
+    - name: internal
+      port: 8081
+      targetPort: internal
+    # Fleets' egress proxy: CONNECT to allowed hosts only.
+    - name: egress
+      port: 8082
+      targetPort: egress
+---
+# The internal port and the egress proxy take connections only from fleet
+# nodes; the public port is behind the gateway's login and checks the user's
+# ID token itself.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kodo-gatekeeper
+  namespace: kodo-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kodo-gatekeeper
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 8080
+    - ports:
+        - port: 8081
+        - port: 8082
+      from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              kodo.dev/role: node

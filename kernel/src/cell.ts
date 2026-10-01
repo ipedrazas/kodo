@@ -21,6 +21,17 @@ export interface CellBinding {
   blueprint: BlueprintVersion;
   owner: Owner;
   shares: Record<string, ShareRole>;
+  // Capabilities granted to this cell; missing on cells bound before Phase 7.
+  grants?: string[];
+}
+
+// What the kernel asserts to the Gatekeeper about the cell making a call.
+export interface CallContext {
+  workspace: string;
+  blueprint: string;
+  version: string;
+  owner: Owner;
+  grants: string[];
 }
 
 type Role = "owner" | ShareRole;
@@ -64,10 +75,12 @@ export const CLOSE_GADGET_FAILED = 4011;
 // One cell per gadget instance. The cell serves only while its workspace has
 // bound it to a Blueprint version. It loads that version's bundle by digest
 // and runs the gadget as a facet with its own SQLite database, no network,
-// and one binding, env.KODO, that acts only for this cell. Every call into
-// the gadget is bounded in time. The cell holds WebSockets and alarms itself,
-// because a facet can hold neither, and passes their events to the gadget as
-// calls.
+// and one binding, env.KODO, that acts only for this cell. The gadget's
+// props list the capabilities its owner granted; the gadget runtime turns
+// each into a binding whose calls go through the kernel to the Gatekeeper.
+// Every call into the gadget is bounded in time. The cell holds WebSockets
+// and alarms itself, because a facet can hold neither, and passes their
+// events to the gadget as calls.
 export class Cell extends DurableObject<Env> {
   private gadget?: Gadget;
 
@@ -81,6 +94,29 @@ export class Cell extends DurableObject<Env> {
   async setShares(shares: Record<string, ShareRole>): Promise<void> {
     const binding = this.binding();
     if (binding) this.ctx.storage.kv.put("binding", { ...binding, shares });
+  }
+
+  // Called by the workspace when the cell's grants change. The gadget restarts
+  // so its bindings match the new grants.
+  async setGrants(grants: string[]): Promise<void> {
+    const binding = this.binding();
+    if (!binding) return;
+    this.ctx.storage.kv.put("binding", { ...binding, grants });
+    this.restart();
+  }
+
+  // Called by the kernel's host binding before it makes a capability call
+  // for this cell.
+  async callContext(): Promise<CallContext | null> {
+    const binding = this.binding();
+    if (!binding) return null;
+    return {
+      workspace: binding.workspace,
+      blueprint: binding.blueprint.name,
+      version: binding.blueprint.version,
+      owner: binding.owner,
+      grants: binding.grants ?? [],
+    };
   }
 
   // Called by the workspace to delete the cell and its gadget's storage.
@@ -212,7 +248,7 @@ export class Cell extends DurableObject<Env> {
       globalOutbound: null,
       limits: { cpuMs: Number(this.env.GADGET_CPU_MS) || 5000 },
     }));
-    const props = await cellProps(this.env, cell);
+    const props = await cellProps(this.env, cell, binding.grants ?? []);
     const facet = this.ctx.facets.get("gadget", () => ({
       class: worker.getDurableObjectClass("App", { props }),
     }));

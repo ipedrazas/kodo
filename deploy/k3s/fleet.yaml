@@ -1,6 +1,8 @@
 # The kodo fleet on the k3s cluster, managed by the operator: Tigris bucket
-# kodo-dev, gVisor, and identity from the in-cluster Dex. The Secret "bucket"
-# holds AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (task k3s:up creates it).
+# kodo-dev, gVisor, identity from the in-cluster Dex, the Gatekeeper, and
+# default-deny egress. The Secret "bucket" holds AWS_ACCESS_KEY_ID and
+# AWS_SECRET_ACCESS_KEY for a key that can reach only kodo-dev (task k3s:up
+# creates it from .buckets.env).
 apiVersion: kodo.dev/v1alpha1
 kind: Fleet
 metadata:
@@ -21,6 +23,22 @@ spec:
     audience: kodo
     # Fetched from inside the cluster, not through the gateway.
     jwksURL: http://dex.kodo-auth.svc:5556/keys
+  # Capability calls go to the Gatekeeper in kodo-system.
+  gatekeeper: {}
+  # Default-deny egress: DNS, the fleet's own nodes and the Gatekeeper, which
+  # proxies HTTPS to Tigris and nothing else, plus Dex's signing keys.
+  egress:
+    proxy: true
+    allow:
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: kodo-auth
+            podSelector:
+              matchLabels:
+                app: dex
+        ports:
+          - port: 5556
   resources:
     requests:
       cpu: 250m

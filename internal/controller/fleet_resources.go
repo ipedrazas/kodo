@@ -37,8 +37,55 @@ const (
 )
 
 // Names of the objects a Fleet owns.
-func peersServiceName(f *kodov1.Fleet) string  { return f.Name + "-peers" }
-func networkPolicyName(f *kodov1.Fleet) string { return f.Name + "-internal" }
+func peersServiceName(f *kodov1.Fleet) string        { return f.Name + "-peers" }
+func networkPolicyName(f *kodov1.Fleet) string       { return f.Name + "-internal" }
+func egressPolicyName(f *kodov1.Fleet) string        { return f.Name + "-egress" }
+func gatekeeperKeySecretName(f *kodov1.Fleet) string { return f.Name + "-gatekeeper-key" }
+
+// The Gatekeeper's internal port, which kernels call, and the label its pods
+// carry.
+const (
+	gatekeeperPort       = 8081
+	gatekeeperEgressPort = 8082
+	gatekeeperName       = "kodo-gatekeeper"
+)
+
+// gatekeeper is the Fleet's Gatekeeper reference with defaults filled in.
+func gatekeeper(f *kodov1.Fleet) *kodov1.GatekeeperRef {
+	if f.Spec.Gatekeeper == nil {
+		return nil
+	}
+	g := *f.Spec.Gatekeeper
+	if g.Namespace == "" {
+		g.Namespace = "kodo-system"
+	}
+	if g.Service == "" {
+		g.Service = gatekeeperName
+	}
+	if g.TrustSecret == "" {
+		g.TrustSecret = "kodo-gatekeeper-fleets"
+	}
+	return &g
+}
+
+// fleetID is how the Gatekeeper knows the fleet, and trustKey the name of
+// its key in the Gatekeeper's trust Secret.
+func fleetID(f *kodov1.Fleet) string  { return f.Namespace + "/" + f.Name }
+func trustKey(f *kodov1.Fleet) string { return f.Namespace + "." + f.Name }
+
+func gatekeeperURL(g *kodov1.GatekeeperRef) string {
+	return fmt.Sprintf("http://%s.%s.svc:%d", g.Service, g.Namespace, gatekeeperPort)
+}
+
+// egressProxy is the Gatekeeper's egress proxy, when the Fleet sends its
+// nodes' HTTPS traffic through it; "" otherwise.
+func egressProxy(f *kodov1.Fleet) string {
+	g := gatekeeper(f)
+	if g == nil || f.Spec.Egress == nil || !f.Spec.Egress.Proxy {
+		return ""
+	}
+	return fmt.Sprintf("http://%s.%s.svc:%d", g.Service, g.Namespace, gatekeeperEgressPort)
+}
 
 // AdminTokenSecretName is the Secret holding the token the operator uses on
 // the Fleet's kernel API, under the key "token".
@@ -50,6 +97,9 @@ func kernelJobName(f *kodov1.Fleet) string {
 	key := f.Spec.Kernel
 	if a := f.Spec.Auth; a != nil {
 		key += "|" + a.Issuer + "|" + a.Audience + "|" + a.JWKSURL
+	}
+	if g := gatekeeper(f); g != nil {
+		key += "|" + gatekeeperURL(g)
 	}
 	sum := sha256.Sum256([]byte(key))
 	return f.Name + "-kernel-" + hex.EncodeToString(sum[:])[:10]
@@ -112,6 +162,18 @@ func kernelAuthEnv(f *kodov1.Fleet) []corev1.EnvVar {
 			corev1.EnvVar{Name: "OIDC_JWKS_URL", Value: jwks},
 		)
 	}
+	if g := gatekeeper(f); g != nil {
+		env = append(env,
+			corev1.EnvVar{Name: "GATEKEEPER_URL", Value: gatekeeperURL(g)},
+			corev1.EnvVar{Name: "FLEET_ID", Value: fleetID(f)},
+			corev1.EnvVar{Name: "GATEKEEPER_KEY", ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: gatekeeperKeySecretName(f)},
+					Key:                  "key",
+				},
+			}},
+		)
+	}
 	return env
 }
 
@@ -139,6 +201,14 @@ func desiredStatefulSet(f *kodov1.Fleet) *appsv1.StatefulSet {
 		{Name: "CELLD_WATCH", Value: "/var/lib/celld/state"},
 		{Name: "CELLD_IDLE_EVICT_S", Value: strconv.Itoa(int(idle))},
 	}, bucketEnv(f)...)
+	if proxy := egressProxy(f); proxy != "" {
+		// HTTPS only: peers, the Gatekeeper and in-cluster services are
+		// plain HTTP and go direct.
+		env = append(env,
+			corev1.EnvVar{Name: "HTTPS_PROXY", Value: proxy},
+			corev1.EnvVar{Name: "NO_PROXY", Value: "localhost,127.0.0.1,.svc,.cluster.local"},
+		)
+	}
 
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: f.Name, Namespace: f.Namespace, Labels: nodeLabels(f)},
@@ -262,6 +332,51 @@ func desiredNetworkPolicy(f *kodov1.Fleet) *networkingv1.NetworkPolicy {
 					}},
 				},
 			},
+		},
+	}
+}
+
+// desiredEgressPolicy denies the nodes every outbound connection except DNS,
+// the fleet's own nodes (the peer protocol), the Gatekeeper's internal port
+// and egress proxy, and the Fleet's extra rules. Nil when the Fleet sets no
+// egress.
+func desiredEgressPolicy(f *kodov1.Fleet) *networkingv1.NetworkPolicy {
+	if f.Spec.Egress == nil {
+		return nil
+	}
+	udp, tcp := corev1.ProtocolUDP, corev1.ProtocolTCP
+	rules := []networkingv1.NetworkPolicyEgressRule{
+		{
+			To: []networkingv1.NetworkPolicyPeer{{
+				NamespaceSelector: &metav1.LabelSelector{},
+				PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"k8s-app": "kube-dns"}},
+			}},
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: &udp, Port: ptr.To(intstr.FromInt32(53))},
+				{Protocol: &tcp, Port: ptr.To(intstr.FromInt32(53))},
+			},
+		},
+		{To: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: nodeSelector(f)}}}},
+	}
+	if g := gatekeeper(f); g != nil {
+		rules = append(rules, networkingv1.NetworkPolicyEgressRule{
+			To: []networkingv1.NetworkPolicyPeer{{
+				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": g.Namespace}},
+				PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": gatekeeperName}},
+			}},
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: &tcp, Port: ptr.To(intstr.FromInt32(gatekeeperPort))},
+				{Protocol: &tcp, Port: ptr.To(intstr.FromInt32(gatekeeperEgressPort))},
+			},
+		})
+	}
+	rules = append(rules, f.Spec.Egress.Allow...)
+	return &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: egressPolicyName(f), Namespace: f.Namespace, Labels: nodeLabels(f)},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: nodeSelector(f)},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+			Egress:      rules,
 		},
 	}
 }
