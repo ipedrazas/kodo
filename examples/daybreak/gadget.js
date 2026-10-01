@@ -290,6 +290,7 @@ const PAGE = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Daybreak</title>
 <style>
+  [hidden] { display: none !important; }
   :root { color-scheme: light dark; --accent: #d97706; --muted: #6b7280; --line: #e5e7eb; --bad: #b91c1c; --ok: #15803d; --card: rgba(127,127,127,.06); }
   body { font: 15px/1.5 system-ui, sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
   h1 { font-size: 1.6rem; margin: 0; } h1 span { color: var(--accent); }

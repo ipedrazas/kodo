@@ -327,6 +327,7 @@ const PAGE = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HN Reader</title>
 <style>
+  [hidden] { display: none !important; }
   :root { color-scheme: light dark; --accent: #ff6600; --muted: #828282; --line: rgba(127,127,127,.25); --bad: #b91c1c; }
   body { font: 15px/1.45 Verdana, system-ui, sans-serif; max-width: 70rem; margin: 0 auto; padding: 0 1rem 2rem; }
   header { display: flex; gap: 1rem; align-items: center; background: var(--accent); color: #000; padding: .4rem .7rem; margin: 0 -1rem 1rem; }

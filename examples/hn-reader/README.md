@@ -5,7 +5,7 @@ A kodo gadget for reading Hacker News: the front page, new, Ask HN and Show HN, 
 | File | What |
 | --- | --- |
 | [`gadget.js`](gadget.js) | The gadget: one module that exports `App`, with its page |
-| [`blueprint.yaml`](blueprint.yaml) | Blueprint `hn-reader` version `1.0.1`, declaring `web:hn.algolia.com/api/v1:read` and `inference:model/*:invoke` |
+| [`blueprint.yaml`](blueprint.yaml) | Blueprint `hn-reader` version `1.0.2`, declaring `web:hn.algolia.com/api/v1:read` and `inference:model/*:invoke` |
 | [`kustomization.yaml`](kustomization.yaml) | The Blueprint and a ConfigMap with the gadget's source |
 
 ## How it works
@@ -34,7 +34,7 @@ In a browser: create an `hn-reader` cell on the home page, `https://app.hiddenfi
 
 ```sh
 kubectl -n kodo apply -k examples/hn-reader
-kubectl -n kodo wait blueprint/hn-reader-1.0.1 --for=condition=Published
+kubectl -n kodo wait blueprint/hn-reader-1.0.2 --for=condition=Published
 
 curl -b jar -H "Origin: https://app.hiddenfield.dev" -H 'content-type: application/json' \
   -d '{"blueprint":"hn-reader"}' https://app.hiddenfield.dev/api/workspaces/team/cells

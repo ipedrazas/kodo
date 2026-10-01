@@ -29,6 +29,8 @@ export const HOME_PAGE = `<!doctype html>
   .grant button { border: 0; background: none; padding: 0 0 0 .3rem; cursor: pointer; color: var(--muted); }
   .grant-form input { font: 13px ui-monospace, monospace; min-width: 22rem; }
   .label { font-size: .85rem; color: var(--muted); margin-right: .25rem; }
+  .hint { font-size: .85rem; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
@@ -125,6 +127,13 @@ async function loadCells() {
   }
 }
 
+// A concrete example of a declared capability with wildcards.
+function example(capability) {
+  if (capability.startsWith("inference:")) return capability.replace("*", "default");
+  if (capability.startsWith("github:")) return capability.replace("*", "acme").replace("*", "api");
+  return capability.split("*").join("name");
+}
+
 // What the owner can do with a cell: its grants, and sharing it.
 async function details(ws, cell) {
   const tr = el("tr", undefined, { className: "details" });
@@ -150,10 +159,21 @@ async function details(ws, cell) {
     const pick = form.appendChild(el("select", undefined, { ariaLabel: "Declared capability" }));
     for (const c of offered) pick.append(el("option", c));
     const input = form.appendChild(el("input", undefined, { required: true, value: offered[0], ariaLabel: "Capability to grant" }));
-    pick.onchange = () => { input.value = pick.value; input.focus(); };
     form.append(el("button", "Grant"));
-    form.append(el("span", "replace each * with what to allow", { className: "muted", hidden: !offered.some((c) => c.includes("*")) }));
-    form.onsubmit = (ev) => { ev.preventDefault(); setGrants([...cell.grants, input.value.trim()]); };
+    const hint = form.appendChild(el("span", "", { className: "muted hint" }));
+    const explain = () => {
+      const open = input.value.includes("*");
+      hint.textContent = open ? "replace each * with what to allow, e.g. " + example(input.value) : "";
+      hint.className = "hint " + (open ? "muted" : "");
+    };
+    pick.onchange = () => { input.value = pick.value; explain(); input.focus(); };
+    input.oninput = explain;
+    explain();
+    form.onsubmit = (ev) => {
+      ev.preventDefault();
+      if (input.value.includes("*")) { hint.className = "hint"; hint.style.color = "#b91c1c"; input.focus(); return; }
+      setGrants([...cell.grants, input.value.trim()]);
+    };
   }
 
   const share = td.appendChild(el("form"));

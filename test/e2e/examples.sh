@@ -36,9 +36,9 @@ kind: Workspace
 metadata: {name: team, namespace: kodo}
 spec: {fleet: kodo, quota: 100}
 YAML
-kubectl -n kodo wait blueprint/daybreak-1.0.1 blueprint/hn-reader-1.0.1 --for=condition=Published --timeout=120s >/dev/null
+kubectl -n kodo wait blueprint/daybreak-1.0.2 blueprint/hn-reader-1.0.2 --for=condition=Published --timeout=120s >/dev/null
 kubectl -n kodo wait workspace/team --for=condition=Synced --timeout=120s >/dev/null
-echo "daybreak 1.0.1 and hn-reader 1.0.1 published"
+echo "daybreak 1.0.2 and hn-reader 1.0.2 published"
 
 step "Daybreak: a circle of two finds time and meets"
 daybreak=$(ok "$(api alice POST /workspaces/team/cells '{"blueprint":"daybreak"}')" 201 "creating the circle" | json 'd["id"]')
