@@ -1,0 +1,13 @@
+# hn-reader as Blueprint hn-reader 1.0.0 on the fleet "kodo":
+#   kubectl -n kodo apply -k examples/hn-reader
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - blueprint.yaml
+configMapGenerator:
+  - name: hn-reader
+    files:
+      - gadget.js
+generatorOptions:
+  # The Blueprint names the ConfigMap; a version's source never changes.
+  disableNameSuffixHash: true

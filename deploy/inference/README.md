@@ -22,7 +22,7 @@ answer + usage ─► Gatekeeper (audit: metered) ─► kernel (cell counts tok
 | [`gateway.yaml`](gateway.yaml) | The Gateway and its `EnvoyProxy` (ClusterIP Service `kodo-inference`), the Gatekeeper's key (`SecurityPolicy`, `sanitize: true`), and the NetworkPolicy that admits only Gatekeeper pods |
 | [`models.yaml`](models.yaml) | The `AIGatewayRoute` from model names to backends, the token costs it records, and the backends: OpenRouter (with its `BackendSecurityPolicy` and TLS) and the simulator |
 | [`budgets.yaml`](budgets.yaml) | Token budgets per user and per workspace, and a call rate per user |
-| [`simulator.yaml`](simulator.yaml) | [llm-d inference-sim](https://github.com/llm-d/llm-d-inference-sim) in echo mode |
+| [`simulator.yaml`](simulator.yaml) | [llm-d inference-sim](https://github.com/llm-d/llm-d-inference-sim) generating random text, with a 32k context |
 | [`ai-gateway-values.yaml`](ai-gateway-values.yaml) | Values for the AI Gateway controller chart |
 
 The platform side is in [`deploy/platform`](../platform): Envoy Gateway's configuration gains the AI Gateway as an extension server, the `Backend` API and global rate limiting, and [Redis](../platform/redis.yaml) (append-only, on a volume) keeps the counters.

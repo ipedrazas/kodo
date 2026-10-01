@@ -66,10 +66,10 @@ type Provider interface {
 	Describe(c Capability, r CallRequest, account string) Summary
 }
 
-// PlatformProvider is a provider whose credentials the platform holds, not
-// each user: users connect nothing, its calls carry no user's token, and it
-// names each call's owner, workspace and cell to the service it reaches,
-// which budgets and reports on them.
+// PlatformProvider is a provider whose credentials, if any, the platform
+// holds, not each user: users connect nothing and its calls carry no user's
+// token. Attribute may name each call's owner, workspace and Blueprint to the
+// service it reaches, which budgets and reports on them.
 type PlatformProvider interface {
 	Provider
 	Attribute(req *http.Request, fleet string, call Call)
@@ -79,6 +79,12 @@ type PlatformProvider interface {
 // also rewrite the answer for the gadget.
 type Metering interface {
 	Meter(a *Answer) *Usage
+}
+
+// OwnClient is a provider that makes its calls with its own client, e.g. one
+// that connects only to public addresses. It must not follow redirects.
+type OwnClient interface {
+	Client() *http.Client
 }
 
 // TimeLimited is a provider whose calls may take longer, or must take less,
