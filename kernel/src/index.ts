@@ -1,5 +1,6 @@
 import { api } from "./api";
 import type { Env } from "./env";
+import { HOME_PAGE } from "./home";
 import { cellFromHost } from "./hostname";
 import { CALLER_HEADER, CELL_HEADER, text } from "./http";
 import { IdentityError, identify } from "./identity";
@@ -19,7 +20,8 @@ export default {
     const url = new URL(request.url);
     const cell = cellFromHost(url.hostname);
     const [, first, ...rest] = url.pathname.split("/");
-    if (!cell && first !== "api") return text(404, "not found");
+    const home = !cell && url.pathname === "/" && request.method === "GET";
+    if (!cell && first !== "api" && !home) return text(404, "not found");
 
     let caller;
     try {
@@ -31,6 +33,14 @@ export default {
     // Every cell has its own origin; a browser request from any other origin
     // may read (subject to CORS) but not change anything or open a socket.
     if (crossOrigin(request, url)) return text(403, "cross-origin request refused");
+    if (home) {
+      return new Response(HOME_PAGE, {
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          "content-security-policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+        },
+      });
+    }
 
     const headers = new Headers();
     for (const [name, value] of request.headers) {

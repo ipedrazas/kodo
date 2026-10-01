@@ -38,8 +38,8 @@ describe("routing", () => {
     assert.deepEqual(await json(await newCell()), { n: 1, cell: null });
   });
 
-  test("answers 404 for a host that is neither a cell nor the API", async () => {
-    assert.equal((await kernel.request("app.example.test", "/")).status, 404);
+  test("answers 404 for a path on the app host that is neither the page nor the API", async () => {
+    assert.equal((await kernel.request("app.example.test", "/elsewhere")).status, 404);
   });
 
   test("uses the hostname, not a client-supplied cell header", async () => {

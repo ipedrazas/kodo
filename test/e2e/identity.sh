@@ -73,6 +73,9 @@ echo "redirected to Dex"
 step "Log in"
 login alice "$ALICE_PASSWORD"
 login bob "$BOB_PASSWORD"
+page=$(c alice "$APP/")
+[[ $page == *"<title>kodo</title>"* ]] || fail "the app page after login: $page"
+echo "the app page serves after login"
 
 step "Publish gadgets through the operator"
 kubectl -n kodo create configmap gadgets --from-file=fixture.js=kernel/test/gadgets/fixture.js \
