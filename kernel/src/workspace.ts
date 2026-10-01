@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { BlueprintVersion } from "./catalog";
+import type { CellUsage, ModelUsage } from "./cell";
 import type { Env } from "./env";
 import { covers, newCellId } from "./names";
 
@@ -28,6 +29,38 @@ export interface WorkspaceInfo {
   quota: number;
   cells: number;
 }
+
+// Usage summed over some cells: the whole workspace, or one owner's.
+export interface UsageTotals {
+  cells: number;
+  // Cells that served a request in the month.
+  activeCells: number;
+  requests: number;
+  // The gadgets' databases as last measured; unmeasured cells add nothing.
+  storageBytes: number;
+  inference: ModelUsage;
+}
+
+export interface CellUsageRow extends CellUsage {
+  id: string;
+  blueprint: string;
+  version: string;
+  owner: Owner;
+  // Why the cell's usage could not be read, if it could not; it then counts
+  // as nothing.
+  error?: string;
+}
+
+export interface WorkspaceUsage {
+  workspace: string;
+  month: string;
+  totals: UsageTotals;
+  owners: (UsageTotals & Owner)[];
+  cells: CellUsageRow[];
+}
+
+// How many cells the usage report asks at once.
+const USAGE_CONCURRENCY = 8;
 
 export type WorkspaceResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string };
 
@@ -201,6 +234,41 @@ export class Workspace extends DurableObject<Env> {
     return { ok: true, value: null };
   }
 
+  // What the cells did in a month, per cell, per owner and in total. `only`
+  // limits the report to one owner's cells.
+  async usage(month: string, only?: string): Promise<WorkspaceUsage | null> {
+    const info = this.info();
+    if (!info) return null;
+    const cells = this.listCells().filter((c) => only === undefined || c.owner.user === only);
+    const rows: CellUsageRow[] = new Array(cells.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < cells.length) {
+        const i = next++;
+        const c = cells[i];
+        const row = { id: c.id, blueprint: c.blueprint, version: c.version, owner: c.owner };
+        try {
+          rows[i] = { ...(await this.env.CELL.getByName(c.id).usage(month)), ...row };
+        } catch (err) {
+          // One cell that cannot answer, e.g. still running an older kernel
+          // just after a deploy, does not fail the report.
+          const error = err instanceof Error ? err.message : String(err);
+          rows[i] = { month, requests: 0, lastActive: null, inference: {}, storageBytes: null, ...row, error };
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(USAGE_CONCURRENCY, cells.length) }, worker));
+
+    const totals = emptyTotals();
+    const owners = new Map<string, UsageTotals & Owner>();
+    for (const row of rows) {
+      let owner = owners.get(row.owner.user);
+      if (!owner) owners.set(row.owner.user, (owner = { ...row.owner, ...emptyTotals() }));
+      for (const t of [totals, owner]) addUsage(t, row);
+    }
+    return { workspace: info.name, month, totals, owners: [...owners.values()], cells: rows };
+  }
+
   private writeGrants(id: string, grants: string[]): void {
     this.ctx.storage.sql.exec("DELETE FROM grants WHERE cell = ?", id);
     for (const g of new Set(grants)) this.ctx.storage.sql.exec("INSERT INTO grants VALUES (?, ?)", id, g);
@@ -214,5 +282,22 @@ export class Workspace extends DurableObject<Env> {
 
   private count(): number {
     return this.ctx.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM cells").one().n;
+  }
+}
+
+function emptyTotals(): UsageTotals {
+  return { cells: 0, activeCells: 0, requests: 0, storageBytes: 0, inference: { calls: 0, input: 0, output: 0, total: 0 } };
+}
+
+function addUsage(t: UsageTotals, row: CellUsage): void {
+  t.cells++;
+  if (row.requests > 0) t.activeCells++;
+  t.requests += row.requests;
+  t.storageBytes += row.storageBytes ?? 0;
+  for (const m of Object.values(row.inference)) {
+    t.inference.calls += m.calls;
+    t.inference.input += m.input;
+    t.inference.output += m.output;
+    t.inference.total += m.total;
   }
 }

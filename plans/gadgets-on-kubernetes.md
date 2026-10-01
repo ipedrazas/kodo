@@ -25,9 +25,11 @@ Durable decisions that apply across all phases:
 - **Identity**: OIDC at the gateway (Gateway API, Envoy Gateway as reference), with one session cookie on the parent domain covering the app and every cell. The gateway forwards the user's ID token in `x-kodo-identity`; the kernel verifies it against the issuer's keys and strips it, and the session cookies, before a gadget sees the request. The operator uses a per-fleet admin token instead. Cells are shared by email as viewer or editor, and every cell refuses writes and WebSockets from other origins.
 - **Capabilities**: `<provider>:<resource>:<verb>`, declared by the Blueprint (with `*` for one resource segment), granted per instance by the cell's owner as concrete capabilities. A grant becomes a binding in the gadget's `this.grants`, which calls back into the kernel, which signs the call with its fleet's key and asserts the cell, owner and grants to the Gatekeeper. The Gatekeeper alone decides. Tokens never enter a fleet; users hand them to the Gatekeeper directly at `app.<domain>/gatekeeper/`.
 - **Isolation**: a gadget is a V8 isolate in a process shared with other gadgets of the same fleet; celld makes no claim beyond that. The kernel boundary is gVisor on the fleet's pods. Mutually distrusting tenants get a fleet each.
-- **Egress**: default-deny NetworkPolicy on fleet pods; egress only to DNS, the Gatekeeper, the inference gateway and the bucket endpoint. A bucket endpoint without fixed addresses (Tigris) is reached through the Gatekeeper's egress proxy, an HTTP CONNECT proxy with a host allowlist, set as the nodes' `HTTPS_PROXY`. The identity provider's keys are an explicit extra rule. celld's internal listener is unauthenticated for operator actions, so it is reachable only from pods of the same fleet.
+- **Egress**: default-deny NetworkPolicy on fleet pods; egress only to DNS, the Gatekeeper and the bucket endpoint. Models are reached through the Gatekeeper, never directly. A bucket endpoint without fixed addresses (Tigris) is reached through the Gatekeeper's egress proxy, an HTTP CONNECT proxy with a host allowlist, set as the nodes' `HTTPS_PROXY`. The identity provider's keys are an explicit extra rule. celld's internal listener is unauthenticated for operator actions, so it is reachable only from pods of the same fleet.
 - **Upgrades**: mixed celld versions cannot share a fleet, so a celld upgrade stops a fleet and restarts it. Kernel deployments roll without a restart.
 - **Kernel delivery**: the kernel ships as an image (celld, esbuild and the kernel source) that the operator runs as a Job against the fleet's bucket. The operator reaches each kernel API through the Kubernetes API server's service proxy. Images are published to GHCR by CI.
+- **Inference**: Envoy AI Gateway on Envoy Gateway, reached only by the Gatekeeper, which calls it for a grant `inference:model/<name>:invoke` with the platform's key and the owner, workspace and Blueprint as headers. The gateway maps model names to backends, holds their keys, and keeps token budgets per user and per workspace in Redis. There are no virtual keys: the Gatekeeper's assertion is the identity.
+- **Usage**: each cell counts its requests, model tokens and its gadget's database size by month, and the kernel reports them per cell, owner and workspace; each model call is also a `metered` audit record.
 - **Metric labels**: workspace and blueprint only; user and cell detail lives in traces, logs and audit.
 - **Environments**: kind with SeaweedFS for local development and CI (MinIO no longer publishes images); the k3s cluster with gVisor and Tigris for integration, performance and demos.
 - **Node disks**: fleet nodes need low fsync latency; celld's write latency and follower health follow it directly (Phase 1 measured about 100 ms per fsync on the k3s nodes and 120 ms per write).
@@ -218,21 +220,37 @@ The Gatekeeper classifies calls by verb. Writes, sends and deletes are parked as
 
 ---
 
-## Phase 9: Inference gateway
+## Phase 9: Inference gateway (done)
+
+In [#14](https://github.com/ipedrazas/kodo/pull/14), verified on the k3s cluster by `test/e2e/inference.sh` (`task k3s:inference-test`) against the real gateway, fleet, Gatekeeper, Envoy AI Gateway v1.1, OpenRouter and an in-cluster simulator; also tested in Go (`internal/gatekeeper/inference_test.go`) and under `celld dev` (`kernel/test/inference.test.mjs`). See [deploy/inference](../deploy/inference/README.md). Decisions:
+
+- Envoy AI Gateway rather than LiteLLM: it is Envoy Gateway, which the platform already runs, configured with Gateway API resources, with budgets as Envoy Gateway rate limits. It has no virtual keys; instead only the Gatekeeper can reach it (NetworkPolicy and an API key) and it asserts the owner and workspace in headers, which the budgets key on.
+- Models go through the Gatekeeper as a capability, `inference:model/<name>:invoke`, with a new verb `invoke` that runs at once. Grants, fleet trust and the audit log are reused, fleets get no new egress, and the owner decides which models a cell may spend their budget on. The Gatekeeper allows only `POST /chat/completions` with an allowlist of fields (some backends read fields that would pick another model), no streaming, and sets `model` to the granted name.
+- `inference` is a platform provider: users connect nothing; the backends' keys are Secrets in the gateway's namespace.
+- Two backends: OpenRouter (`default`, `meta-llama/llama-3.1-8b-instruct`) and llm-d inference-sim (`sim`). Moving a model is an edit to the `AIGatewayRoute`.
+- Budgets: 1M tokens a month per user, 5M per workspace, 60 calls a minute per user, in Redis with append-only persistence. The call that crosses a budget is answered; the next is refused with 429.
+- Usage is counted by the cell, not aggregated from the audit log: the kernel's report is per cell, owner and workspace by month, with requests, last activity and storage. A model call's tokens are written as it returns; requests are written five seconds after use, so no request waits for a write of its own, and a cell that stops in that time loses a few. The audit log has every call.
+
+Findings:
+
+- Stripping the identity headers before a backend (`headerMutation`) silently disabled the token budgets: Envoy builds the stream-done rate limit descriptors again from the request headers, which upstream filters had already changed. So `x-kodo-user` (the opaque subject), `x-kodo-workspace` and `x-kodo-blueprint` reach backends; the Gatekeeper sends no email address or cell id.
+- AI Gateway v1.1.0 is built for Envoy Gateway 1.8 and works on 1.9.2 (Envoy 1.39). Envoy Gateway disables `x-envoy-ratelimited`, so a budget refusal is a 429 with `x-ratelimit-*` headers and no body.
+- Right after a kernel deploy, Durable Objects that were already active run the old code until they are evicted (about 30 s), so a new RPC method fails meanwhile; the usage report reports such a cell as unreadable rather than failing. A cell replaced in those seconds lost the counts it held in memory: the first run after a deploy lost two model calls' tokens, which is why they are now written at once.
+- Moving a model to another backend takes effect within seconds; in between, the gateway answered four of eight calls with 500, cause not yet known. The gadget sees the 500; nothing is charged.
 
 **User stories**: model routing; cost per user and team; budgets.
 
 ### What to build
 
-Deploy the inference gateway (LiteLLM or Envoy AI Gateway, chosen in this phase) with a virtual key per user and team. Gadgets reach models through an inference binding; keys stay outside the fleet. Budgets and rate limits are enforced at the gateway and usage is attributed per user and workspace.
+Deploy the inference gateway (LiteLLM or Envoy AI Gateway, chosen in this phase; Envoy AI Gateway was chosen) with a virtual key per user and team. Gadgets reach models through an inference binding; keys stay outside the fleet. Budgets and rate limits are enforced at the gateway and usage is attributed per user and workspace.
 
 ### Acceptance criteria
 
-- [ ] A gadget calls a model through its binding with no provider key in the fleet
-- [ ] A user over budget is refused at the gateway
-- [ ] Token usage is reported per user and team
-- [ ] Routing to at least two backends is configurable without gadget changes
-- [ ] Storage and activity per workspace are reported alongside tokens
+- [x] A gadget calls a model through its binding with no provider key in the fleet
+- [x] A user over budget is refused at the gateway
+- [x] Token usage is reported per user and team
+- [x] Routing to at least two backends is configurable without gadget changes
+- [x] Storage and activity per workspace are reported alongside tokens
 
 ---
 

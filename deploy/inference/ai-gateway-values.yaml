@@ -1,0 +1,16 @@
+# Values for the Envoy AI Gateway controller chart
+# (oci://docker.io/envoyproxy/ai-gateway-helm, v1.1.0), installed into
+# envoy-ai-gateway-system by task k3s:inference.
+controller:
+  logFormat: json
+  # Token metrics are labelled with the workspace and Blueprint only; users
+  # and cells are in the Gatekeeper's audit log and the kernel's usage report.
+  metricsRequestHeaderAttributes: "x-kodo-workspace:kodo.workspace,x-kodo-blueprint:kodo.blueprint"
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+extProc:
+  logFormat: json

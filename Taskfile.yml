@@ -9,6 +9,7 @@ vars:
   SPIKE_BUCKET: kodo-celld-spike
   SPIKE_NS: kodo-spike
   K3S_CONTEXT: default
+  AI_GATEWAY_VERSION: v1.1.0
   TARGET: kind
   CONTEXT: '{{if eq .TARGET "kind"}}kind-{{.KIND_CLUSTER}}{{else}}{{.K3S_CONTEXT}}{{end}}'
   VERSION:
@@ -238,9 +239,7 @@ tasks:
     requires:
       vars: [KERNEL_IMAGE, OPERATOR_IMAGE, GATEKEEPER_IMAGE]
     cmds:
-      - kubectl --context {{.K3S_CONTEXT}} apply --server-side -k deploy/platform
-      - kubectl --context {{.K3S_CONTEXT}} -n cert-manager rollout status deploy/cert-manager-webhook --timeout=300s
-      - kubectl --context {{.K3S_CONTEXT}} -n envoy-gateway-system rollout status deploy/envoy-gateway --timeout=300s
+      - task: k3s:platform
       - >-
         kubectl --context {{.K3S_CONTEXT}} -n cert-manager create secret generic cloudflare-api-token
         --from-literal=token="$CLOUDFLARE_API_TOKEN" --dry-run=client -o yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
@@ -261,6 +260,48 @@ tasks:
       - sed "s#KERNEL_IMAGE#{{.KERNEL_IMAGE}}#" deploy/k3s/fleet.yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
       - kubectl --context {{.K3S_CONTEXT}} apply -f deploy/k3s/routes.yaml
       - kubectl --context {{.K3S_CONTEXT}} -n kodo wait fleet/kodo --for=condition=Ready --timeout=600s
+      - task: k3s:inference
+
+  k3s:platform:
+    desc: Cluster prerequisites on the k3s cluster (cert-manager, Envoy Gateway with Redis, the Envoy AI Gateway controller; needs helm)
+    cmds:
+      - kubectl --context {{.K3S_CONTEXT}} apply --server-side -k deploy/platform
+      - kubectl --context {{.K3S_CONTEXT}} -n cert-manager rollout status deploy/cert-manager-webhook --timeout=300s
+      - kubectl --context {{.K3S_CONTEXT}} -n envoy-gateway-system rollout status deploy/redis --timeout=300s
+      - >-
+        helm --kube-context {{.K3S_CONTEXT}} upgrade -i aieg-crd oci://docker.io/envoyproxy/ai-gateway-crds-helm
+        --version {{.AI_GATEWAY_VERSION}} -n envoy-ai-gateway-system --create-namespace
+      - >-
+        helm --kube-context {{.K3S_CONTEXT}} upgrade -i aieg oci://docker.io/envoyproxy/ai-gateway-helm
+        --version {{.AI_GATEWAY_VERSION}} -n envoy-ai-gateway-system -f deploy/inference/ai-gateway-values.yaml --wait --timeout 5m
+      # Envoy Gateway reads its configuration (deploy/platform/envoy-gateway-config.yaml) only at start.
+      - kubectl --context {{.K3S_CONTEXT}} -n envoy-gateway-system rollout restart deploy/envoy-gateway
+      - kubectl --context {{.K3S_CONTEXT}} -n envoy-gateway-system rollout status deploy/envoy-gateway --timeout=300s
+
+  k3s:inference:
+    desc: The inference gateway on the k3s cluster (OPENROUTER_API_KEY in .env for the default model); run after k3s:platform and k3s:gatekeeper
+    cmds:
+      # The key only the Gatekeeper sends to the inference gateway, made once.
+      - >-
+        kubectl --context {{.K3S_CONTEXT}} -n kodo-system get secret kodo-gatekeeper-inference >/dev/null 2>&1 ||
+        kubectl --context {{.K3S_CONTEXT}} -n kodo-system create secret generic kodo-gatekeeper-inference
+        --from-literal=key=$(openssl rand -hex 32)
+      - kubectl --context {{.K3S_CONTEXT}} create namespace kodo-inference --dry-run=client -o yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - >-
+        kubectl --context {{.K3S_CONTEXT}} -n kodo-inference create secret generic kodo-inference-clients
+        --from-literal=gatekeeper="$(kubectl --context {{.K3S_CONTEXT}} -n kodo-system get secret kodo-gatekeeper-inference -o jsonpath='{.data.key}' | base64 -d)"
+        --dry-run=client -o yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - >-
+        if test -n "$OPENROUTER_API_KEY"; then
+        kubectl --context {{.K3S_CONTEXT}} -n kodo-inference create secret generic openrouter --from-literal=apiKey="$OPENROUTER_API_KEY"
+        --dry-run=client -o yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -;
+        else echo "OPENROUTER_API_KEY is not set: the default model will not answer" >&2; fi
+      - kubectl --context {{.K3S_CONTEXT}} apply -k deploy/inference
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo-inference wait gateway/kodo-inference --for=condition=Programmed --timeout=300s
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo-inference rollout status deploy/sim --timeout=300s
+      # The Gatekeeper reads the gateway's key at start.
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo-system rollout restart deploy/kodo-gatekeeper
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo-system rollout status deploy/kodo-gatekeeper --timeout=300s
 
   k3s:bucket-keys:
     desc: Create the scoped fleet and Gatekeeper bucket keys in .buckets.env, once (needs the admin key in .env)
@@ -306,6 +347,11 @@ tasks:
     desc: Check the approval queue end to end on hiddenfield.dev (RESEND_API_KEY and RESEND_FROM in .env; restarts the Gatekeeper twice)
     cmds:
       - test/e2e/approvals.sh
+
+  k3s:inference-test:
+    desc: Check the inference gateway end to end on hiddenfield.dev (OPENROUTER_API_KEY for the real model)
+    cmds:
+      - test/e2e/inference.sh
 
   k3s:identity-test:
     desc: Log in through the hiddenfield.dev gateway as the test users and check identity, TLS and sharing

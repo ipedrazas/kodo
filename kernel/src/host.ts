@@ -51,7 +51,9 @@ export const FLEET_HEADER = "x-kodo-fleet";
 export const TIMESTAMP_HEADER = "x-kodo-timestamp";
 export const SIGNATURE_HEADER = "x-kodo-signature";
 
-const GATEKEEPER_TIMEOUT_MS = 20_000;
+// Above the Gatekeeper's own limits (20 s for a model call), so it answers
+// first, and below a gadget call's 30 s.
+const GATEKEEPER_TIMEOUT_MS = 25_000;
 const MAX_REQUEST_BODY = 1024 * 1024;
 
 // Holds the kernel's signing key: created on first use, stored in this
@@ -153,7 +155,17 @@ export class GadgetHost extends WorkerEntrypoint<Env> {
       if (err instanceof GatekeeperError) return denied(err.status, err.message);
       throw err;
     }
-    const answer = fromAnswer((await res.json()) as Answer);
+    const raw = (await res.json()) as Answer;
+    const answer = fromAnswer(raw);
+    // What a metered call (a model call) consumed is counted for the cell;
+    // the gadget sees only the response.
+    if (raw.usage) {
+      try {
+        await this.env.CELL.getByName(cell).recordUsage(capability, raw.usage);
+      } catch (err) {
+        console.log(`cell ${cell}: counting usage failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }
     // A call parked for approval: the cell follows it and tells the gadget
     // how it ends.
     const approval = answer.headers["x-kodo-approval"];
@@ -172,11 +184,21 @@ export class GadgetHost extends WorkerEntrypoint<Env> {
   }
 }
 
-// An answer from the Gatekeeper, with the body base64-encoded.
+// An answer from the Gatekeeper, with the body base64-encoded, and what the
+// call consumed if its provider is metered.
 interface Answer {
   status: number;
   headers?: Record<string, string>;
   body?: string;
+  usage?: TokenUsage;
+}
+
+// Tokens one model call used, as its backend reported them.
+export interface TokenUsage {
+  model?: string;
+  input: number;
+  output: number;
+  total: number;
 }
 
 function fromAnswer(answer: Answer): CapabilityResponse {
@@ -367,6 +389,11 @@ export class Gadget extends DurableObject {
   // {id, capability, state, reason, createdAt, decidedAt, response}.
   async approval(id) {
     return toApproval(await this.#host((host, props) => host.approval(props, id)));
+  }
+
+  // Called by the cell to measure the gadget's database for usage reports.
+  __kodoStorageBytes() {
+    return this.ctx.storage.sql.databaseSize;
   }
 
   // Called by the cell when an approval this cell is waiting on settles.

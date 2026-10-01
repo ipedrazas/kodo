@@ -1,0 +1,68 @@
+# Envoy Gateway's own configuration, as install.yaml ships it plus what the
+# inference gateway needs: the Envoy AI Gateway controller as an extension
+# server (it adds its filters to the inference gateway's Envoy), the Backend
+# API for model backends outside the cluster, and global rate limiting with
+# Redis, which keeps the token budgets. The extension hook fails closed:
+# while the AI Gateway controller is down, Envoy Gateway keeps every proxy's
+# last good configuration rather than serve the inference gateway without
+# its filters. Envoy Gateway reads this at start; task k3s:inference
+# restarts it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: envoy-gateway-config
+  namespace: envoy-gateway-system
+data:
+  envoy-gateway.yaml: |
+    apiVersion: gateway.envoyproxy.io/v1alpha1
+    kind: EnvoyGateway
+    gateway:
+      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    logging:
+      level:
+        default: info
+    provider:
+      type: Kubernetes
+      kubernetes:
+        rateLimitDeployment:
+          container:
+            image: docker.io/envoyproxy/ratelimit:0482748e
+          patch:
+            type: StrategicMerge
+            value:
+              spec:
+                template:
+                  spec:
+                    containers:
+                      - imagePullPolicy: IfNotPresent
+                        name: envoy-ratelimit
+        shutdownManager:
+          image: envoyproxy/gateway:v1.9.2
+    extensionApis:
+      enableBackend: true
+      enableEnvoyPatchPolicy: true
+    rateLimit:
+      backend:
+        type: Redis
+        redis:
+          url: redis.envoy-gateway-system.svc.cluster.local:6379
+    extensionManager:
+      hooks:
+        xdsTranslator:
+          translation:
+            listener:
+              includeAll: true
+            route:
+              includeAll: true
+            cluster:
+              includeAll: true
+            secret:
+              includeAll: true
+          post:
+            - Translation
+            - Cluster
+            - Route
+      service:
+        fqdn:
+          hostname: ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local
+          port: 1063

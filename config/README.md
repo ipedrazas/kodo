@@ -114,6 +114,10 @@ Every state change is a write conditional on the object's ETag (`If-Match`), so 
 
 The `email` provider sends through Resend (`RESEND_API_URL`, default `https://api.resend.com`); each user connects their own API key and the From address, which must be on a domain the key's account has verified (or `onboarding@resend.dev`).
 
+### Inference
+
+With `INFERENCE_URL` set, the Gatekeeper has an `inference` provider: `inference:model/<name>:invoke` grants a model behind the inference gateway ([`deploy/inference`](../deploy/inference/README.md)). It is a platform provider, so users connect nothing and it is not offered on the page; the platform's keys for the model backends live at the gateway. The Gatekeeper takes the gadget's chat completion, refuses fields outside a small allowlist (some backends read fields that pick another model), streaming and `n` above 1, sets `model` to the granted name, and sends it with the key from `INFERENCE_KEY_FILE` (Secret `kodo-gatekeeper-inference`, optional) and three headers the gateway budgets and labels metrics on: `x-kodo-user` (the owner's subject), `x-kodo-workspace` (`<fleet namespace>/<fleet>/<workspace>`) and `x-kodo-blueprint`. A call may take `INFERENCE_TIMEOUT` (default 20 s). The decision is recorded before the call as `allowed`, and what it used afterwards as `metered`, with the upstream status and `usage` (`model`, `input`, `output`, `total` tokens); the kernel gets the same usage in the answer and counts it for the cell. A refusal by the gateway's budgets reaches the gadget as 429 with `{"error"}` and `x-ratelimit-reset`.
+
 ## How the operator reaches the kernel
 
 Through the Kubernetes API server's service proxy (`services/proxy` on the fleet's Service), so it works the same in and out of the cluster and the fleet needs no ingress for it.

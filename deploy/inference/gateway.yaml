@@ -1,0 +1,88 @@
+# The inference gateway: an Envoy Gateway Gateway that only the Gatekeeper
+# reaches, with the Envoy AI Gateway's filters. It is a ClusterIP Service
+# with a fixed name, kodo-inference.envoy-gateway-system.svc, plain HTTP on
+# port 80, and takes a call only with the Gatekeeper's key (in
+# x-kodo-gateway-key, removed before anything else sees the call).
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: kodo-inference
+  namespace: kodo-inference
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        name: kodo-inference
+        type: ClusterIP
+      envoyDeployment:
+        replicas: 1
+        container:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: kodo-inference
+  namespace: kodo-inference
+spec:
+  gatewayClassName: eg
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: kodo-inference
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+# The Gatekeeper's key, from Secret kodo-inference-clients (key "gatekeeper"),
+# which task k3s:inference creates with the Gatekeeper's copy.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: kodo-inference
+  namespace: kodo-inference
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: kodo-inference
+  apiKeyAuth:
+    credentialRefs:
+      - name: kodo-inference-clients
+    extractFrom:
+      - headers: [x-kodo-gateway-key]
+    sanitize: true
+---
+# Only the Gatekeeper reaches the inference gateway's listener.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kodo-inference
+  namespace: envoy-gateway-system
+spec:
+  podSelector:
+    matchLabels:
+      gateway.envoyproxy.io/owning-gateway-name: kodo-inference
+      gateway.envoyproxy.io/owning-gateway-namespace: kodo-inference
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kodo-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kodo-gatekeeper
+      ports:
+        - port: 10080

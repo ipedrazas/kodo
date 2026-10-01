@@ -10,10 +10,11 @@ The LAN environment: cert-manager, Envoy Gateway, Dex and the operator-managed `
 | Fleet | `Fleet/kodo` in namespace `kodo`, bucket `kodo-dev`, default-deny egress |
 | Gatekeeper | `kodo-gatekeeper` in `kodo-system`, bucket `kodo-dev-gatekeeper`, OpenBao at `openbao.alacasa.uk`; users connect accounts at `app.hiddenfield.dev/gatekeeper/` |
 | Login | `SecurityPolicy/kodo-login`: OIDC with Dex, one session cookie on `.hiddenfield.dev` |
+| Inference gateway | Envoy AI Gateway, namespace `kodo-inference`, Service `kodo-inference.envoy-gateway-system.svc` (Gatekeeper only); models `default` (OpenRouter) and `sim` (in-cluster simulator); budgets in Redis. See [deploy/inference](../inference/README.md) |
 
 ## Bring it up
 
-`.env` needs the Tigris admin key (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL_IAM`), `CLOUDFLARE_API_TOKEN` (Zone DNS Edit and Zone Read on hiddenfield.dev), `LETSENCRYPT_EMAIL`, and the Gatekeeper's OpenBao AppRole, which `task openbao:setup` writes (see [deploy/openbao](../openbao/README.md)). The approvals test also needs `RESEND_API_KEY` and `RESEND_FROM`, a From address on a domain verified in that Resend account.
+`.env` needs the Tigris admin key (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL_IAM`), `CLOUDFLARE_API_TOKEN` (Zone DNS Edit and Zone Read on hiddenfield.dev), `LETSENCRYPT_EMAIL`, the Gatekeeper's OpenBao AppRole, which `task openbao:setup` writes (see [deploy/openbao](../openbao/README.md)), and `OPENROUTER_API_KEY` for the `default` model. The approvals test also needs `RESEND_API_KEY` and `RESEND_FROM`, a From address on a domain verified in that Resend account. `helm` must be on `PATH` for the AI Gateway charts.
 
 ```sh
 BAO_ADDR=http://openbao.alacasa.uk:8200 BAO_TOKEN=<admin> task openbao:setup   # once
@@ -22,6 +23,7 @@ task k3s:up KERNEL_IMAGE=ghcr.io/ipedrazas/kodo-kernel:main OPERATOR_IMAGE=ghcr.
 task k3s:identity-test
 task k3s:gatekeeper-test        # Phase 7: grants, the Gatekeeper, egress, the vault and audit
 task k3s:approvals-test         # Phase 8: the approval queue; restarts the Gatekeeper twice
+task k3s:inference-test         # Phase 9: models through grants, routing, budgets and usage
 ```
 
 ## Bucket keys
@@ -37,7 +39,7 @@ They are Tigris IAM policies on access keys, so a fleet's credentials cannot lis
 
 ## Egress
 
-The fleet's nodes can open connections only to DNS, each other, the Gatekeeper (8081 for calls, 8082 for the egress proxy) and Dex's keys. Tigris's addresses change with DNS, so the nodes reach the bucket through the Gatekeeper's egress proxy (`HTTPS_PROXY`), which tunnels only to `t3.storage.dev` and `*.t3.storage.dev`. Anything else, GitHub included, is refused.
+The fleet's nodes can open connections only to DNS, each other, the Gatekeeper (8081 for calls, 8082 for the egress proxy) and Dex's keys. Tigris's addresses change with DNS, so the nodes reach the bucket through the Gatekeeper's egress proxy (`HTTPS_PROXY`), which tunnels only to `t3.storage.dev` and `*.t3.storage.dev`. Anything else, GitHub and the model providers included, is refused. Models are reached only through the Gatekeeper, which is the only client the inference gateway admits.
 
 `k3s:up` creates `.auth.env` (git-ignored) with the Dex client secret and the test users' passwords on first run. Log in as `alice@hiddenfield.dev` or `bob@hiddenfield.dev` with those passwords.
 

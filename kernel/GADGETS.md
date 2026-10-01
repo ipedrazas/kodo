@@ -62,9 +62,25 @@ const res = await repo.fetch("/readme", { headers: { accept: "application/vnd.gi
 | Provider | Resource | Verb | Allows |
 | --- | --- | --- | --- |
 | `github` | `repo/<owner>/<repo>` | `read` | `GET` and `HEAD` on `https://api.github.com/repos/<owner>/<repo>` and everything under it. Request headers other than `Accept`, `If-None-Match` and `If-Modified-Since` are dropped; redirects come back as they are. |
+| `inference` | `model/<name>` | `invoke` | `POST /chat/completions` with an OpenAI chat completion: `messages` and optionally `max_tokens`, `max_completion_tokens`, `temperature`, `top_p`, `stop`, `seed`, `presence_penalty`, `frequency_penalty`, `response_format`, `tools`, `tool_choice`, `parallel_tool_calls`, `reasoning_effort`, `logprobs`, `top_logprobs`. The model is the granted one, whatever the body says; no streaming, `n` at most 1. The platform holds the keys, so the owner connects nothing; tokens count against the owner's and the workspace's budgets. See [Models](#models). |
 | `email` | `outbox` | `send` | `POST ""` with `{"to", "cc", "bcc", "reply_to", "subject", "text", "html"}`, each address field an address or a list (at most 50 recipients), and `text` or `html`. Sent through Resend from the address the owner connected with; a gadget cannot set the sender, other headers or attachments. Waits for approval. |
 
-The verb decides what happens: `read` runs at once; `write`, `send` and `delete` wait for the owner's approval; any other verb is denied. A response says who produced it in `x-kodo-decision`: `allowed` (the provider's answer), `pending` (202, queued for approval), `denied` (403 from the Gatekeeper, with `{"error"}`) or `error`/`failed` (the kernel or Gatekeeper could not make the call). The owner must have connected the provider at `app.<domain>/gatekeeper/`; until then, calls are denied.
+The verb decides what happens: `read` and `invoke` run at once; `write`, `send` and `delete` wait for the owner's approval; any other verb is denied. A response says who produced it in `x-kodo-decision`: `allowed` (the provider's answer), `pending` (202, queued for approval), `denied` (403 from the Gatekeeper, with `{"error"}`) or `error`/`failed` (the kernel or Gatekeeper could not make the call). The owner must have connected the provider at `app.<domain>/gatekeeper/`; until then, calls are denied. `inference` is the exception: the platform holds its keys.
+
+## Models
+
+A Blueprint declares the models its gadget may use, usually `inference:model/*:invoke`, and the owner grants the ones it may, e.g. `inference:model/default:invoke`. Which backend serves a model is the platform's choice, made at its inference gateway, and can change without any change to the gadget:
+
+```js
+const model = this.grants["inference:model/default:invoke"];
+const res = await model.fetch("/chat/completions", {
+  method: "POST",
+  body: JSON.stringify({ messages: [{ role: "user", content: "Say hello" }], max_tokens: 64 }),
+});
+const answer = await res.json(); // {model, choices: [{message}], usage: {prompt_tokens, completion_tokens}}
+```
+
+`answer.model` is the backend's name for the model that answered. Every call counts against budgets on the cell's owner and on its workspace, whoever is using the cell; one over budget is answered 429 with `{"error"}` and `x-ratelimit-reset`, the seconds until it resets. A model call must answer within 20 s, so keep `max_tokens` modest. The cell counts each call's tokens for the workspace's usage report.
 
 ## Approvals
 
@@ -112,6 +128,7 @@ async onApproval(approval) {
 | A binding's call is outside its grant, or the owner has not connected the provider | The binding answers 403, `x-kodo-decision: denied` |
 | The fleet has no Gatekeeper, or it is unreachable | The binding answers 503 or 502, `x-kodo-decision: error` |
 | A send, write or delete within the grant | The binding answers 202, `x-kodo-decision: pending`; `onApproval` follows |
+| A model call when the owner or workspace is over budget | The binding answers 429 with `{"error"}` and `x-ratelimit-reset` |
 | `onApproval` throws | Logged; not called again for that approval |
 
 ## Publishing

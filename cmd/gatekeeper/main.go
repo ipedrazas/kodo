@@ -24,6 +24,11 @@
 //	OPENBAO_TOKEN             token (development only)
 //	GITHUB_API_URL            default https://api.github.com
 //	RESEND_API_URL            the email provider's API; default https://api.resend.com
+//	INFERENCE_URL             the inference gateway, e.g. http://kodo-inference.envoy-gateway-system.svc;
+//	                          without it there is no inference provider
+//	INFERENCE_KEY_FILE        a file holding the key the inference gateway requires, read once at
+//	                          start; if it does not exist, no key is sent
+//	INFERENCE_TIMEOUT         how long a model call may take (default 20s)
 //	GATEKEEPER_APPROVAL_TTL   how long a call waits for approval (default 168h)
 //	GATEKEEPER_APPROVAL_STALE how long an approval may be executing before it
 //	                          is reported failed (default 1m; keep it well above
@@ -94,18 +99,26 @@ func run(log *slog.Logger) error {
 	}
 
 	client := &http.Client{Timeout: 15 * time.Second}
+	providers := map[string]gatekeeper.Provider{
+		"github": gatekeeper.GitHub{APIURL: os.Getenv("GITHUB_API_URL"), HTTP: client},
+		"email":  gatekeeper.Email{APIURL: os.Getenv("RESEND_API_URL"), HTTP: client},
+	}
+	inference, err := inferenceProvider()
+	if err != nil {
+		return err
+	}
+	if inference.URL != "" {
+		providers["inference"] = inference
+	}
 	srv := &gatekeeper.Server{
 		Trust:     gatekeeper.Trust{Dir: env("GATEKEEPER_TRUST_DIR", "/etc/kodo/fleets")},
 		Tokens:    gatekeeper.Tokens{Store: store, Vault: transit},
 		Audit:     gatekeeper.Audit{Store: store},
 		Approvals: gatekeeper.Approvals{Store: store, TTL: ttl, Stale: stale},
-		Providers: map[string]gatekeeper.Provider{
-			"github": gatekeeper.GitHub{APIURL: os.Getenv("GITHUB_API_URL"), HTTP: client},
-			"email":  gatekeeper.Email{APIURL: os.Getenv("RESEND_API_URL"), HTTP: client},
-		},
-		Users:    users,
-		Upstream: gatekeeper.NoRedirects(15 * time.Second),
-		Log:      log,
+		Providers: providers,
+		Users:     users,
+		Upstream:  gatekeeper.NoRedirects(time.Minute),
+		Log:       log,
 	}
 
 	var allow []string
@@ -127,7 +140,7 @@ func run(log *slog.Logger) error {
 	}
 	log.Info("gatekeeper serving", "version", version.String(), "public", servers[0].Addr, "internal", servers[1].Addr,
 		"egress", servers[2].Addr, "egress_allow", allow, "bucket", bucket, "openbao", transit.Addr,
-		"approval_ttl", ttl.String(), "approval_stale", stale.String())
+		"approval_ttl", ttl.String(), "approval_stale", stale.String(), "inference", inference.URL)
 
 	select {
 	case err := <-errs:
@@ -140,6 +153,23 @@ func run(log *slog.Logger) error {
 		_ = s.Shutdown(shutdown)
 	}
 	return nil
+}
+
+func inferenceProvider() (gatekeeper.Inference, error) {
+	timeout, err := duration("INFERENCE_TIMEOUT", gatekeeper.DefaultInferenceTimeout)
+	if err != nil {
+		return gatekeeper.Inference{}, err
+	}
+	i := gatekeeper.Inference{URL: os.Getenv("INFERENCE_URL"), Timeout: timeout}
+	// A missing file means the gateway needs no key.
+	if file := os.Getenv("INFERENCE_KEY_FILE"); file != "" {
+		key, err := os.ReadFile(file)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return i, fmt.Errorf("INFERENCE_KEY_FILE: %w", err)
+		}
+		i.Key = strings.TrimSpace(string(key))
+	}
+	return i, nil
 }
 
 func openBao() (*vault.Transit, error) {

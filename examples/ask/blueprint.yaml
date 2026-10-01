@@ -1,0 +1,16 @@
+# Blueprint ask 1.0.0. It declares that it may call any model behind the
+# inference gateway; its owner grants the ones it may use, e.g.
+# inference:model/default:invoke.
+apiVersion: kodo.dev/v1alpha1
+kind: Blueprint
+metadata:
+  name: ask-1.0.0
+spec:
+  fleet: kodo
+  blueprint: ask
+  version: 1.0.0
+  source:
+    name: ask
+    key: gadget.js
+  capabilities:
+    - inference:model/*:invoke

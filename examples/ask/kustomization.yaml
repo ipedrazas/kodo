@@ -1,0 +1,13 @@
+# Ask as Blueprint ask 1.0.0 on the fleet "kodo":
+#   kubectl -n kodo apply -k examples/ask
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - blueprint.yaml
+configMapGenerator:
+  - name: ask
+    files:
+      - gadget.js
+generatorOptions:
+  # The Blueprint names the ConfigMap; a version's source never changes.
+  disableNameSuffixHash: true

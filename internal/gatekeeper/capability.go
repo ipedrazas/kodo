@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Capability is <provider>:<resource>:<verb>, e.g. github:repo/acme/api:read.
@@ -32,18 +33,17 @@ func ParseCapability(s string) (Capability, error) {
 	return Capability{Provider: s[:first], Resource: s[first+1 : last], Verb: s[last+1:]}, nil
 }
 
-// Verbs whose calls change something outside: they wait in the approval
-// queue until the cell's owner approves them. A read runs at once; any other
-// verb is denied.
-var sideEffecting = map[string]bool{"write": true, "send": true, "delete": true}
+// The verbs the Gatekeeper knows, and whether their calls change something
+// outside: those wait in the approval queue until the cell's owner approves
+// them. A read or an invoke (a model call, which changes nothing outside but
+// is budgeted) runs at once; any other verb is denied.
+var verbs = map[string]bool{"read": false, "invoke": false, "write": true, "send": true, "delete": true}
 
 // SideEffecting reports whether a capability's calls wait for approval, and
 // whether its verb is one the Gatekeeper knows at all.
 func SideEffecting(c Capability) (waits, known bool) {
-	if c.Verb == "read" {
-		return false, true
-	}
-	return sideEffecting[c.Verb], sideEffecting[c.Verb]
+	waits, known = verbs[c.Verb]
+	return waits, known
 }
 
 // Provider is one external service the Gatekeeper can call for gadgets.
@@ -65,6 +65,30 @@ type Provider interface {
 	// approve it.
 	Describe(c Capability, r CallRequest, account string) Summary
 }
+
+// PlatformProvider is a provider whose credentials the platform holds, not
+// each user: users connect nothing, its calls carry no user's token, and it
+// names each call's owner, workspace and cell to the service it reaches,
+// which budgets and reports on them.
+type PlatformProvider interface {
+	Provider
+	Attribute(req *http.Request, fleet string, call Call)
+}
+
+// Metering is a provider whose answers say what the call consumed. Meter may
+// also rewrite the answer for the gadget.
+type Metering interface {
+	Meter(a *Answer) *Usage
+}
+
+// TimeLimited is a provider whose calls may take longer, or must take less,
+// than DefaultCallTimeout.
+type TimeLimited interface {
+	CallTimeout() time.Duration
+}
+
+// DefaultCallTimeout bounds a call to a provider.
+const DefaultCallTimeout = 15 * time.Second
 
 // AccountChooser is a provider whose users name the account when they
 // connect, such as the From address of email.

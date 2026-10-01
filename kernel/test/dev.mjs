@@ -7,7 +7,7 @@
 // tokens for test users, and holds an admin token. With `gatekeeper` set it
 // also plays the Gatekeeper: it checks each call's signature, records it, and
 // answers with `gatekeeper(call)` if that is a function ({status, headers,
-// body}), or else 200 with the call it received as the body. Approval
+// body, usage?}), or else 200 with the call it received as the body. Approval
 // queries are answered from `gatekeeper.approvals`, a Map of id to status
 // ({state, ...}) that tests fill in; queries are kept in `queries`.
 import { spawn } from "node:child_process";
@@ -188,6 +188,7 @@ async function startGatekeeper(answer = echo) {
         status: a.status,
         headers: { "x-kodo-decision": "allowed", ...a.headers },
         body: Buffer.from(a.body ?? "").toString("base64"),
+        ...(a.usage ? { usage: a.usage } : {}),
       }));
     });
   });
