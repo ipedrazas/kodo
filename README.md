@@ -114,7 +114,7 @@ Images are built by CI for amd64 and arm64: `ghcr.io/ipedrazas/kodo-{kernel,oper
 
 ## Status
 
-Phases 0 to 5 and 7 are done: celld spike, kernel, Blueprints and workspaces, operator, identity and sharing, and the Gatekeeper read path. Phase 8, the approval queue, is built and tested under `celld dev` and in Go; its end-to-end run on k3s is pending. Phase 6 (autoscaling and observability) waits on upstream celld fixes. The [plan](plans/gadgets-on-kubernetes.md) has the details and what comes next: the inference gateway and the agent.
+Phases 0 to 5, 7 and 8 are done: celld spike, kernel, Blueprints and workspaces, operator, identity and sharing, the Gatekeeper read path, and the approval queue. Phase 6 (autoscaling and observability) waits on upstream celld fixes. The [plan](plans/gadgets-on-kubernetes.md) has the details and what comes next: the inference gateway and the agent.
 
 ## License
 

@@ -186,15 +186,20 @@ The Gatekeeper as a stateless Go service outside every fleet, with per-request s
 
 ---
 
-## Phase 8: Approval queue
+## Phase 8: Approval queue (done)
 
-Built on branch `phase-8/approvals`; tested in Go (`internal/gatekeeper/approvals_test.go`, including racing replicas and a replica killed mid-call) and under `celld dev` (`kernel/test/approvals.test.mjs`, across hibernation). The k3s end-to-end test is `test/e2e/approvals.sh` (`task k3s:approvals-test`), not yet run. Decisions:
+In [#12](https://github.com/ipedrazas/kodo/pull/12), verified on the k3s cluster by `test/e2e/approvals.sh` (`task k3s:approvals-test`) against the real Gatekeeper (two replicas), OpenBao, Tigris and Resend; also tested in Go (`internal/gatekeeper/approvals_test.go`) and under `celld dev` (`kernel/test/approvals.test.mjs`). Decisions:
 
 - The email provider is `email:outbox:send`, backed by Resend with each user's own API key and From address; the gadget cannot set the sender or headers. Calls carry `Idempotency-Key: <approval id>`.
 - The cell, not the gadget, follows its pending approvals: it polls the Gatekeeper on the alarm it shares with the gadget's (2 s, doubling to a minute) and calls the gadget's `onApproval` once when one settles; `this.approval(id)` asks directly. The Gatekeeper does not push to fleets.
 - The owner approves at `app.<domain>/gatekeeper/`, which no other page may frame; the home page shows how many calls wait.
 - An approval runs with the grants it was queued under; revoking a grant does not cancel it.
 - The audit decision for a call from an untrusted fleet is now `untrusted`; `rejected` is the owner's.
+
+Findings:
+
+- The gateway encrypts its session cookies, so a test cannot take the ID token from them and call a Gatekeeper pod directly. The race test goes through the gateway, and its access log shows both replicas answered (one 200, eleven 409).
+- On the k3s run, twelve concurrent approves led to one send, which Resend accepted. A Gatekeeper force-killed while sending (to a tarpit) left the approval executing; a minute later it read as failed, the one attempt was never repeated, and the mailer heard about it through `onApproval`.
 
 **User stories**: side-effecting calls wait for a human.
 
@@ -204,12 +209,12 @@ The Gatekeeper classifies calls by verb. Writes, sends and deletes are parked as
 
 ### Acceptance criteria
 
-- [ ] A gadget drafts an email and the send waits in the queue
-- [ ] Approving runs the call at most once, even with two Gatekeeper replicas racing; rejecting never runs it
-- [ ] A Gatekeeper killed mid-execution leaves the approval reported as failed, not silently retried or lost
-- [ ] The gadget observes the pending, approved and rejected outcomes
-- [ ] Pending approvals survive a Gatekeeper restart and cell hibernation
-- [ ] Audit records who approved what, and when
+- [x] A gadget drafts an email and the send waits in the queue
+- [x] Approving runs the call at most once, even with two Gatekeeper replicas racing; rejecting never runs it
+- [x] A Gatekeeper killed mid-execution leaves the approval reported as failed, not silently retried or lost
+- [x] The gadget observes the pending, approved and rejected outcomes
+- [x] Pending approvals survive a Gatekeeper restart and cell hibernation
+- [x] Audit records who approved what, and when
 
 ---
 

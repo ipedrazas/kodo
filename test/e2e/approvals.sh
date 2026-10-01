@@ -40,7 +40,9 @@ gk() { # gk USER METHOD PATH [JSON]: the Gatekeeper's user API, body then status
   [[ -n ${4:-} ]] && args+=(-H 'content-type: application/json' -d "$4")
   c "$1" "${args[@]}" "$APP/gatekeeper/api$3"
 }
-approval() { gk alice GET "/approvals/$1" | head -1 | json "d['approval']$2"; }
+# While the Gatekeeper restarts the gateway answers 503 without JSON; then
+# this prints nothing and the caller's wait tries again.
+approval() { gk alice GET "/approvals/$1" | head -1 | json "d['approval']$2" 2>/dev/null; }
 outbox() { c alice "$(cell)/api/outbox/$1" | json "$2"; }
 cell() { echo "https://$mailer.g.$DOMAIN"; }
 draft() { # draft SUBJECT: send a draft from the mailer, print the approval id
@@ -69,6 +71,8 @@ cleanup() {
   kubectl delete namespace "$SCRATCH" --wait=false >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+# A previous run's namespace may still be going away.
+kubectl delete namespace "$SCRATCH" --ignore-not-found --wait=true --timeout=180s >/dev/null
 
 step "Log in, connect email, publish the mailer"
 login alice "$ALICE_PASSWORD"
@@ -107,26 +111,36 @@ sleep 5
 echo "still pending 5 s later; the gadget sees it as pending"
 
 step "Two Gatekeeper replicas race to approve it; the email is sent once"
-pods=$("${GK[@]}" get pods -l app.kubernetes.io/name=kodo-gatekeeper --field-selector=status.phase=Running \
+ips=$("${GK[@]}" get pods -l app.kubernetes.io/name=kodo-gatekeeper --field-selector=status.phase=Running \
   -o jsonpath='{range .items[*]}{.status.podIP}{" "}{end}')
-read -ra ips <<<"$pods"
-((${#ips[@]} >= 2)) || fail "need two Gatekeeper replicas, found: $pods"
-id_token=$(awk '$6 == "kodo-id" {print $7}' "$(jar alice)")
-[[ -n $id_token ]] || fail "no ID token in alice's session"
-kubectl create namespace "$SCRATCH" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-kubectl -n "$SCRATCH" run racer --image=curlimages/curl:8.16.0 --restart=Never --command -- sleep 900 >/dev/null
-kubectl -n "$SCRATCH" wait --for=condition=Ready pod/racer --timeout=120s >/dev/null
-# Six approves at each replica at once, straight to the pods.
-# shellcheck disable=SC2016 # $ip and $i expand in the pod's shell
-statuses=$(kubectl -n "$SCRATCH" exec racer -- sh -c '
-  for i in 1 2 3 4 5 6; do for ip in '"${ips[*]:0:2}"'; do
-    curl -s -m 30 -o /dev/null -w "%{http_code}\n" -X POST -H "x-kodo-identity: '"$id_token"'" \
-      "http://$ip:8080/gatekeeper/api/approvals/'"$first"'/approve" &
-  done; done; wait')
+(($(wc -w <<<"$ips") >= 2)) || fail "need two Gatekeeper replicas, found: $ips"
+# Twelve approves at once through the gateway, which spreads them over the
+# replicas; its access log says which replica answered each. The session
+# cookie is encrypted by the gateway, so the ID token cannot go to the pods
+# directly. The cookie jar is only read, by all of them.
+raced=$(date -u +%Y-%m-%dT%H:%M:%S)
+statuses=$(for _ in $(seq 12); do
+  curl -sS -m 30 --connect-to "::$GATEWAY:" -b "$(jar alice)" -X POST -H "Origin: $APP" -o /dev/null \
+    -w '%{http_code}\n' "$APP/gatekeeper/api/approvals/$first/approve" &
+done; wait)
 ok=$(grep -c '^200$' <<<"$statuses" || true)
 conflict=$(grep -c '^409$' <<<"$statuses" || true)
 [[ $ok == 1 && $conflict == 11 ]] || fail "racing approves answered: $(sort <<<"$statuses" | uniq -c | xargs)"
-echo "12 approves at ${ips[0]} and ${ips[1]}: 1 ran the call, 11 got 409"
+sleep 2
+answered=$(kubectl -n envoy-gateway-system logs -l gateway.envoyproxy.io/owning-gateway-name=kodo -c envoy --since-time="${raced}Z" |
+  python3 -c '
+import json, sys, collections
+first = sys.argv[1]
+by = collections.Counter()
+for line in sys.stdin:
+    try: r = json.loads(line)
+    except ValueError: continue
+    if r.get("x-envoy-origin-path") == f"/gatekeeper/api/approvals/{first}/approve":
+        by[(r["upstream_host"].split(":")[0], r["response_code"])] += 1
+print(" ".join(f"{h}:{c}x{n}" for (h, c), n in sorted(by.items())))' "$first")
+replicas=$(tr ' ' '\n' <<<"$answered" | cut -d: -f1 | sort -u | grep -c . || true)
+((replicas >= 2)) || fail "the approves did not reach two replicas: $answered"
+echo "12 approves through the gateway, answered by $replicas replicas ($answered): 1 ran the call, 11 got 409"
 state=$(approval "$first" '["state"]')
 status=$(approval "$first" '["result"]["status"]')
 [[ $state == "done" && $status == 200 ]] || fail "after approval: $state $status"
@@ -163,6 +177,7 @@ echo "rejected; approve afterwards is refused; the mailer shows it rejected"
 step "A pending approval survives a Gatekeeper restart and the cell's hibernation"
 third=$(draft "kodo e2e $run: killed mid-send")
 # A tarpit that accepts the send and never answers, in place of Resend.
+kubectl create namespace "$SCRATCH" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 cat <<'YAML' | kubectl -n "$SCRATCH" apply -f - >/dev/null
 apiVersion: v1
 kind: Pod
