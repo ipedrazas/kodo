@@ -229,13 +229,14 @@ In [#14](https://github.com/ipedrazas/kodo/pull/14), verified on the k3s cluster
 - `inference` is a platform provider: users connect nothing; the backends' keys are Secrets in the gateway's namespace.
 - Two backends: OpenRouter (`default`, `meta-llama/llama-3.1-8b-instruct`) and llm-d inference-sim (`sim`). Moving a model is an edit to the `AIGatewayRoute`.
 - Budgets: 1M tokens a month per user, 5M per workspace, 60 calls a minute per user, in Redis with append-only persistence. The call that crosses a budget is answered; the next is refused with 429.
-- Usage is counted by the cell, not aggregated from the audit log: the kernel's report is per cell, owner and workspace by month, with requests, last activity and storage. Counts are written five seconds after use, so no request waits for a write of its own.
+- Usage is counted by the cell, not aggregated from the audit log: the kernel's report is per cell, owner and workspace by month, with requests, last activity and storage. A model call's tokens are written as it returns; requests are written five seconds after use, so no request waits for a write of its own, and a cell that stops in that time loses a few. The audit log has every call.
 
 Findings:
 
 - Stripping the identity headers before a backend (`headerMutation`) silently disabled the token budgets: Envoy builds the stream-done rate limit descriptors again from the request headers, which upstream filters had already changed. So `x-kodo-user` (the opaque subject), `x-kodo-workspace` and `x-kodo-blueprint` reach backends; the Gatekeeper sends no email address or cell id.
 - AI Gateway v1.1.0 is built for Envoy Gateway 1.8 and works on 1.9.2 (Envoy 1.39). Envoy Gateway disables `x-envoy-ratelimited`, so a budget refusal is a 429 with `x-ratelimit-*` headers and no body.
-- Right after a kernel deploy, Durable Objects that were already active run the old code until they are evicted (about 30 s), so a new RPC method fails meanwhile; the usage report reports such a cell as unreadable rather than failing.
+- Right after a kernel deploy, Durable Objects that were already active run the old code until they are evicted (about 30 s), so a new RPC method fails meanwhile; the usage report reports such a cell as unreadable rather than failing. A cell replaced in those seconds lost the counts it held in memory: the first run after a deploy lost two model calls' tokens, which is why they are now written at once.
+- Moving a model to another backend takes effect within seconds; in between, the gateway answered four of eight calls with 500, cause not yet known. The gadget sees the 500; nothing is charged.
 
 **User stories**: model routing; cost per user and team; budgets.
 

@@ -97,8 +97,9 @@ interface ApprovalWatch {
   at: number;
   delay: number;
 }
-// Usage is counted in memory and written a few seconds later, so that a
-// request does not wait for a write of its own.
+// Requests are counted in memory and written a few seconds later, so that a
+// request does not wait for a write of its own; a cell that stops in that
+// time loses them. Model calls are written at once.
 const USAGE_FLUSH_MS = 5_000;
 const STORAGE_MEASURE_MS = 2_000;
 const APPROVAL_POLL_FIRST_MS = 2_000;
@@ -177,7 +178,9 @@ export class Cell extends DurableObject<Env> {
   }
 
   // Called by the kernel's host binding with what one of this cell's model
-  // calls used.
+  // calls used. Written at once, with any requests not yet written: a model
+  // call takes far longer than the write, and its tokens are what budgets
+  // and costs are about.
   async recordUsage(capability: string, usage: TokenUsage): Promise<void> {
     const model = modelName(capability);
     if (!model) return;
@@ -187,6 +190,7 @@ export class Cell extends DurableObject<Env> {
     m.input += count(usage?.input);
     m.output += count(usage?.output);
     m.total += count(usage?.total) || count(usage?.input) + count(usage?.output);
+    this.writeUsage();
   }
 
   // What the cell did in a month (YYYY-MM, UTC), for the workspace's usage

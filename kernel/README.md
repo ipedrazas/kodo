@@ -35,7 +35,7 @@ Uploading bundles, publishing and configuring workspaces need the admin token. A
 | PUT | `/api/blueprints/:name/:version` | `{bundle, capabilities?, tier?}` | 201, or 409 if already published |
 | PUT | `/api/workspaces/:ws` | `{quota?}` (default 100) | Creates or updates the workspace |
 | GET | `/api/workspaces/:ws` | | `{name, quota, cells}` |
-| GET | `/api/workspaces/:ws/usage[?month=YYYY-MM]` | | Usage in a month (default this one, UTC): `{workspace, month, totals, owners, cells}`. Each has `requests` (HTTP requests and WebSocket messages that reached the gadget), `storageBytes` (the gadget's database, as last measured) and `inference` (model calls and input, output and total tokens; per granted model for a cell); totals and owners add `cells` and `activeCells`. The admin token sees every cell; a user sees the cells they own. |
+| GET | `/api/workspaces/:ws/usage[?month=YYYY-MM]` | | Usage in a month (default this one, UTC): `{workspace, month, totals, owners, cells}`. Each has `requests` (HTTP requests and WebSocket messages that reached the gadget, written a few seconds after use, so a cell that stops in that time loses a few), `storageBytes` (the gadget's database, as last measured) and `inference` (model calls and input, output and total tokens; per granted model for a cell); totals and owners add `cells` and `activeCells`. The admin token sees every cell; a user sees the cells they own. |
 | GET | `/api/workspaces/:ws/cells` | | `{cells: [...]}` |
 | POST | `/api/workspaces/:ws/cells` | `{blueprint, version?}` (default: latest) | 201 `{id, blueprint, version, owner, shares, createdAt}`, or 409 over quota |
 | GET | `/api/workspaces/:ws/cells/:id` | | The cell |

@@ -71,4 +71,5 @@ The Gatekeeper sends no email address, cell or credential, and the gateway remov
 
 - With headers removed by `headerMutation`, the budgets passed every call: the check on the way in worked, but the tokens were never charged. Envoy logged one rate limit call per request; the counters in Redis stayed at 0 while the AI Gateway's metrics counted the tokens.
 - AI Gateway v1.1.0 is built against Envoy Gateway v1.8.1; it runs on v1.9.2 (Envoy 1.39) here. Envoy Gateway turns off `x-envoy-ratelimited`, so a refusal is a 429 with `x-ratelimit-*` headers and no body; a backend's own 429 has a body.
+- Moving a model to another backend took a few seconds to take effect, and in between the gateway answered four of eight calls with 500 (cause not yet known); nothing was charged for them.
 - The extension hook fails closed: while the AI Gateway controller is down, Envoy Gateway keeps every proxy's last configuration, the main gateway's included, and applies no changes.
