@@ -18,6 +18,8 @@ import type { Owner, ShareRole } from "./workspace";
 // optional and are called by the cell on the gadget's behalf.
 interface Gadget {
   fetch(request: Request): Promise<Response>;
+  // Defined by the agent's runner (runner.ts) only.
+  __kodoRun(code: string, input: unknown): Promise<RunnerResult>;
   onMessage(socket: string, message: string | ArrayBuffer, caller: GadgetCaller): Promise<string | ArrayBuffer | undefined>;
   onClose(socket: string, code: number, reason: string): Promise<void>;
   onAlarm(): Promise<void>;
@@ -61,9 +63,54 @@ export interface CellBinding {
   shares: Record<string, ShareRole>;
   // Capabilities granted to this cell; missing on cells bound before Phase 7.
   grants?: string[];
+  // Set on an ephemeral cell, which runs the agent's code once for a
+  // session and is then deleted.
+  run?: EphemeralRun;
 }
 
-// What the kernel asserts to the Gatekeeper about the cell making a call.
+interface EphemeralRun {
+  session: string;
+  // Capability calls the code has made, and how many it may.
+  calls: number;
+  callLimit: number;
+}
+
+// What the runner gadget answers.
+export interface RunnerResult {
+  ok: boolean;
+  value?: unknown;
+  error?: string;
+  logs: string[];
+  // Calls that wait for the owner's approval.
+  approvals: { id: string; capability: string }[];
+}
+
+// One run of the agent's code in an ephemeral cell; see Cell.run.
+export interface RunSpec {
+  // The ephemeral cell's id, which is also this cell's name.
+  id: string;
+  workspace: string;
+  session: string;
+  owner: Owner;
+  grants: string[];
+  // The runner's bundle, by digest.
+  bundle: string;
+  code: string;
+  input: unknown;
+  timeoutMs: number;
+  callLimit: number;
+}
+
+export interface RunResult extends RunnerResult {
+  id: string;
+  calls: number;
+  ms: number;
+}
+
+// What the kernel asserts to the Gatekeeper about the cell making a call,
+// or why the cell may not make it.
+export type CallCheck = CallContext | { refused: string; status: number };
+
 export interface CallContext {
   workspace: string;
   blueprint: string;
@@ -105,6 +152,12 @@ const STORAGE_MEASURE_MS = 2_000;
 const APPROVAL_POLL_FIRST_MS = 2_000;
 const APPROVAL_POLL_MAX_MS = 60_000;
 const MAX_WATCHED_APPROVALS = 100;
+// An ephemeral cell that a run left behind, because its node stopped
+// mid-run, deletes itself this long after the run's time limit.
+const RUN_CLEANUP_GRACE_MS = 30_000;
+// The Blueprint an ephemeral cell runs: the agent's runner. Its version is
+// the session, so the Gatekeeper's audit log ties each run to its session.
+export const AGENT_BLUEPRINT = "agent";
 
 // A failed gadget call, with the HTTP status that reports it.
 class GadgetError extends Error {
@@ -164,10 +217,17 @@ export class Cell extends DurableObject<Env> {
   }
 
   // Called by the kernel's host binding before it makes a capability call
-  // for this cell.
-  async callContext(): Promise<CallContext | null> {
+  // for this cell. An ephemeral cell counts the call against its limit.
+  async callContext(): Promise<CallCheck | null> {
     const binding = this.binding();
     if (!binding) return null;
+    if (binding.run) {
+      const run = { ...binding.run, calls: binding.run.calls + 1 };
+      this.ctx.storage.kv.put("binding", { ...binding, run });
+      if (run.calls > run.callLimit) {
+        return { refused: `this run has made its ${run.callLimit} capability calls`, status: 429 };
+      }
+    }
     return {
       workspace: binding.workspace,
       blueprint: binding.blueprint.name,
@@ -182,6 +242,9 @@ export class Cell extends DurableObject<Env> {
   // call takes far longer than the write, and its tokens are what budgets
   // and costs are about.
   async recordUsage(capability: string, usage: TokenUsage): Promise<void> {
+    // An ephemeral cell is about to be deleted; its session counts for it.
+    const run = this.binding()?.run;
+    if (run) return this.env.SESSION.getByName(run.session).recordUsage(capability, usage);
     const model = modelName(capability);
     if (!model) return;
     const month = this.counting();
@@ -234,7 +297,14 @@ export class Cell extends DurableObject<Env> {
   // Called by the kernel's host binding when one of this cell's calls is
   // queued for approval. The cell asks the Gatekeeper about it until it
   // settles, then tells the gadget.
-  async trackApproval(id: string): Promise<void> {
+  async trackApproval(id: string, capability = ""): Promise<void> {
+    // An ephemeral cell is about to be deleted; its session follows the
+    // approval instead and reports how it ends in the transcript.
+    const binding = this.binding();
+    const cell = this.ctx.storage.kv.get<string>("cell");
+    if (binding?.run && cell) {
+      return this.env.SESSION.getByName(binding.run.session).trackApproval(id, cell, capability);
+    }
     await this.adoptAlarm();
     const watch = this.ctx.storage.kv.get<ApprovalWatch>("approvals") ?? { ids: [], at: 0, delay: 0 };
     if (!watch.ids.includes(id)) watch.ids = [...watch.ids, id].slice(-MAX_WATCHED_APPROVALS);
@@ -252,12 +322,55 @@ export class Cell extends DurableObject<Env> {
     return fromApprovals(((await res.json()) as { approvals: Parameters<typeof fromApprovals>[0] }).approvals);
   }
 
+  // Runs the agent's code once in this cell, which must be new, with the
+  // session's grants, then deletes the cell and everything in it, whatever
+  // happens. Each call into the code is bounded by the run's time limit and
+  // the runner's CPU limit, and each capability call counts against its
+  // limit. Should the node stop mid-run, the alarm set here deletes the cell.
+  async run(spec: RunSpec): Promise<RunResult> {
+    const started = Date.now();
+    if (this.binding()) throw new Error(`cell ${spec.id} already exists`);
+    const binding: CellBinding = {
+      workspace: spec.workspace,
+      blueprint: {
+        name: AGENT_BLUEPRINT,
+        version: spec.session,
+        bundle: spec.bundle,
+        capabilities: [],
+        tier: AGENT_BLUEPRINT,
+        publishedAt: 0,
+      },
+      owner: spec.owner,
+      shares: {},
+      grants: spec.grants,
+      run: { session: spec.session, calls: 0, callLimit: spec.callLimit },
+    };
+    this.ctx.storage.kv.put("binding", binding);
+    this.ctx.storage.kv.put("cell", spec.id);
+    await this.ctx.storage.setAlarm(started + spec.timeoutMs + RUN_CLEANUP_GRACE_MS);
+    let result: RunnerResult;
+    try {
+      result = await this.call(spec.id, (gadget) => gadget.__kodoRun(spec.code, spec.input), spec.timeoutMs);
+    } catch (err) {
+      result = { ok: false, error: err instanceof Error ? err.message : String(err), logs: [], approvals: [] };
+    }
+    const calls = Math.min(this.binding()?.run?.calls ?? 0, spec.callLimit);
+    await this.unbind();
+    return { ...result, id: spec.id, calls, ms: Date.now() - started };
+  }
+
+  // What is left of this cell: for checking that an ephemeral cell is gone.
+  async residue(): Promise<{ bound: boolean; keys: number }> {
+    return { bound: this.binding() !== undefined, keys: [...this.ctx.storage.kv.list()].length };
+  }
+
   async fetch(request: Request): Promise<Response> {
     const cell = request.headers.get(CELL_HEADER);
     const callerHeader = request.headers.get(CALLER_HEADER);
     if (!cell || !callerHeader) return text(400, "request did not come through the kernel router");
     const binding = this.binding();
-    if (!binding) return text(404, `cell ${cell} does not exist`);
+    // An ephemeral cell is never served.
+    if (!binding || binding.run) return text(404, `cell ${cell} does not exist`);
     const caller = gadgetCaller(JSON.parse(callerHeader) as Caller, binding);
     if (!caller) return text(403, `cell ${cell} is not shared with you`);
     const upgrade = request.headers.get("Upgrade")?.toLowerCase() === "websocket";
@@ -316,6 +429,12 @@ export class Cell extends DurableObject<Env> {
     const kv = this.ctx.storage.kv;
     const cell = kv.get<string>("cell");
     const now = Date.now();
+    // An ephemeral cell whose run never finished.
+    if (this.binding()?.run) {
+      console.log(`cell ${cell}: deleting a run left behind`);
+      await this.unbind();
+      return;
+    }
     if (cell && this.binding()) {
       const gadgetAt = kv.get<number>("gadget-alarm");
       // Before the cell kept its own schedule, every alarm was the gadget's.
@@ -480,13 +599,16 @@ export class Cell extends DurableObject<Env> {
     // The loaded Worker is shared by every cell running this bundle on this
     // node, so its env holds only the host binding; the per-cell identity
     // travels in the facet's props.
+    // The runner gets the agent's CPU limit; the loader keeps one Worker
+    // per digest, so every run of it shares that limit.
+    const cpuMs = binding.run ? Number(this.env.AGENT_RUN_CPU_MS) || 2000 : Number(this.env.GADGET_CPU_MS) || 5000;
     const worker = this.env.LOADER.get(digest, () => ({
       compatibilityDate: "2026-09-01",
       mainModule: "gadget.js",
       modules: { "gadget.js": source, kodo: GADGET_RUNTIME },
       env: { KODO: (this.ctx.exports as unknown as KernelExports).GadgetHost({}) },
       globalOutbound: null,
-      limits: { cpuMs: Number(this.env.GADGET_CPU_MS) || 5000 },
+      limits: { cpuMs },
     }));
     const props = await cellProps(this.env, cell, binding.grants ?? []);
     const facet = this.ctx.facets.get("gadget", () => ({
@@ -499,9 +621,9 @@ export class Cell extends DurableObject<Env> {
   // Runs one call into the gadget. A call that throws becomes a 502; a call
   // that has not answered in time restarts the gadget, so the next call
   // starts it afresh, and becomes a 504.
-  private async call<T>(cell: string, fn: (gadget: Gadget) => Promise<T>): Promise<T> {
+  private async call<T>(cell: string, fn: (gadget: Gadget) => Promise<T>, timeoutMs?: number): Promise<T> {
     const gadget = await this.load(cell);
-    const limit = Number(this.env.GADGET_CALL_TIMEOUT_MS) || 30_000;
+    const limit = timeoutMs ?? (Number(this.env.GADGET_CALL_TIMEOUT_MS) || 30_000);
     let timer: number | null = null;
     const pending = Promise.resolve().then(() => fn(gadget));
     const timeout = new Promise<typeof TIMED_OUT>((resolve) => {

@@ -71,7 +71,9 @@ export class Keys extends DurableObject<Env> {
 
 let signingKey: Promise<CryptoKey> | undefined;
 
-function key(env: Env): Promise<CryptoKey> {
+// The kernel's own HMAC key, from Keys. It signs each cell's props, and,
+// with a "turn:" prefix, the agent's turn tokens.
+export function kernelKey(env: Env): Promise<CryptoKey> {
   signingKey ??= env.KEYS.getByName("kernel")
     .secret()
     .then((secret) =>
@@ -91,7 +93,7 @@ function key(env: Env): Promise<CryptoKey> {
 }
 
 export async function cellProps(env: Env, cell: string, grants: string[] = []): Promise<CellProps> {
-  const mac = await crypto.subtle.sign("HMAC", await key(env), new TextEncoder().encode(cell));
+  const mac = await crypto.subtle.sign("HMAC", await kernelKey(env), new TextEncoder().encode(cell));
   return { cell, token: btoa(String.fromCharCode(...new Uint8Array(mac))), grants };
 }
 
@@ -104,7 +106,7 @@ async function verified(env: Env, props: unknown): Promise<string> {
   } catch {
     throw new Error("invalid cell props");
   }
-  const ok = await crypto.subtle.verify("HMAC", await key(env), mac, new TextEncoder().encode(cell));
+  const ok = await crypto.subtle.verify("HMAC", await kernelKey(env), mac, new TextEncoder().encode(cell));
   if (!ok) throw new Error("invalid cell props");
   return cell;
 }
@@ -137,6 +139,7 @@ export class GadgetHost extends WorkerEntrypoint<Env> {
 
     const context = await this.env.CELL.getByName(cell).callContext();
     if (!context) return denied(404, `cell ${cell} does not exist`);
+    if ("refused" in context) return denied(context.status, context.refused);
 
     let res: Response;
     try {
@@ -170,7 +173,7 @@ export class GadgetHost extends WorkerEntrypoint<Env> {
     // how it ends.
     const approval = answer.headers["x-kodo-approval"];
     if (answer.headers["x-kodo-decision"] === "pending" && approval) {
-      await this.env.CELL.getByName(cell).trackApproval(approval);
+      await this.env.CELL.getByName(cell).trackApproval(approval, capability);
     }
     return answer;
   }

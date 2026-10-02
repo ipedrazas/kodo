@@ -40,9 +40,12 @@ function split(capability: string): { provider: string; resource: string; verb: 
   };
 }
 
-// A new cell id: "c" and 12 base32 characters, a valid DNS label.
-export function newCellId(): string {
+// A new id: a letter and 12 base32 characters, a valid DNS label. Cells
+// start with "c", the agent's sessions with "s" and its runs with "r".
+export function newId(prefix: "c" | "s" | "r"): string {
   const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
   const bytes = crypto.getRandomValues(new Uint8Array(12));
-  return "c" + [...bytes].map((b) => alphabet[b & 31]).join("");
+  return prefix + [...bytes].map((b) => alphabet[b & 31]).join("");
 }
+
+export const newCellId = () => newId("c");
