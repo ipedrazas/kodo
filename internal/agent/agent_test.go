@@ -299,6 +299,35 @@ func TestTurnExplainsModelRefusals(t *testing.T) {
 	}
 }
 
+func TestTurnExplainsCutOffAnswers(t *testing.T) {
+	// An answer that reached max_tokens with nothing in it ends the turn and
+	// names the limit.
+	f, srv := newFakeKernel(t)
+	f.model = func(int, map[string]any) (int, string) {
+		return 200, `{"choices":[{"message":{"role":"assistant","content":""},"finish_reason":"length"}]}`
+	}
+	send(t, newServer(srv.URL), f, "write a big gadget")
+	if last := f.session.Messages[len(f.session.Messages)-1]; !strings.Contains(last.Content, "256 tokens") {
+		t.Fatalf("last message %q", last.Content)
+	}
+
+	// A tool call in a cut-off answer does not run; the model is told why.
+	f, srv = newFakeKernel(t)
+	f.model = func(n int, _ map[string]any) (int, string) {
+		if n == 1 {
+			return 200, strings.Replace(toolCallAnswer("c1", "write_gadget", `{"name":"big","source":"export class`), `"finish_reason":"tool_calls"`, `"finish_reason":"length"`, 1)
+		}
+		return 200, textAnswer("I will write a smaller one.")
+	}
+	send(t, newServer(srv.URL), f, "write a big gadget")
+	if len(f.drafts) != 0 {
+		t.Fatal("a cut-off write_gadget ran")
+	}
+	if got := f.session.Messages[2]; got.Role != "tool" || !strings.Contains(got.Content, "cut off at your limit of 256 tokens") {
+		t.Fatalf("tool result %+v", got)
+	}
+}
+
 func TestTurnStopsAfterMaxSteps(t *testing.T) {
 	f, srv := newFakeKernel(t)
 	f.model = func(n int, _ map[string]any) (int, string) {

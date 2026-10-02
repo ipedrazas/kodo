@@ -73,7 +73,12 @@ func (t *turn) run(ctx context.Context) {
 			return
 		}
 		for _, call := range reply.ToolCalls {
-			result, run := t.tool(ctx, call)
+			result, run := "", ""
+			if reply.CutOff {
+				result = toolError(fmt.Sprintf("this call was cut off at your limit of %d tokens per answer and did not run; make it shorter", t.config.MaxTokens))
+			} else {
+				result, run = t.tool(ctx, call)
+			}
 			if !t.append(ctx, Message{Role: "tool", ToolCallID: call.ID, Name: call.Function.Name, Content: result, Run: run}) {
 				return
 			}
@@ -107,6 +112,9 @@ type chatMessage struct {
 type reply struct {
 	Content   string
 	ToolCalls []ToolCall
+	// CutOff is set when the answer reached max_tokens, so its tool calls
+	// may be incomplete.
+	CutOff bool
 }
 
 // ask calls the model with the conversation so far.
@@ -137,7 +145,7 @@ func (t *turn) ask(ctx context.Context) (reply, error) {
 		return reply{}, say("My model gave an answer I could not read.")
 	}
 	c := answer.Choices[0]
-	r := reply{ToolCalls: c.Message.ToolCalls}
+	r := reply{ToolCalls: c.Message.ToolCalls, CutOff: c.FinishReason == "length"}
 	if c.Message.Content != nil {
 		r.Content = strings.TrimSpace(*c.Message.Content)
 	}
@@ -148,8 +156,10 @@ func (t *turn) ask(ctx context.Context) (reply, error) {
 		}
 	}
 	if r.Content == "" && len(r.ToolCalls) == 0 {
-		if c.FinishReason == "length" {
-			return reply{}, say("My answer was cut off before it began. Ask me again, more narrowly.")
+		// A tool call cut off this way is usually dropped whole: most often
+		// a gadget longer than one answer may be.
+		if r.CutOff {
+			return reply{}, say("My answer was longer than the %d tokens I may write at once, so it was cut off. If I was writing a gadget, ask for a smaller one, or raise AGENT_MAX_TOKENS.", t.config.MaxTokens)
 		}
 		return reply{}, say("My model answered with nothing.")
 	}
