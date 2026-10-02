@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { BlueprintVersion } from "./catalog";
-import type { CheckResult, MonthUsage, RunResult } from "./cell";
+import type { CheckRequest, CheckResult, MonthUsage, RunResult } from "./cell";
 import { AGENT_BLUEPRINT } from "./cell";
 import type { Env } from "./env";
 import { type ApprovalStatus, GatekeeperError, SETTLED, type TokenUsage, fromApprovals, gatekeeper } from "./host";
@@ -285,7 +285,12 @@ export class Session extends DurableObject<Env> {
   // session's owner, records in the Gatekeeper's audit log that they
   // authored it, and loads it once to see that it serves. Only the owner
   // can use the draft until they publish it, and publishing is theirs alone.
-  async draft(name: string, source: string, capabilities: string[]): Promise<SessionResult<DraftResult>> {
+  async draft(
+    name: string,
+    source: string,
+    capabilities: string[],
+    requests: CheckRequest[] = [],
+  ): Promise<SessionResult<DraftResult>> {
     const info = this.info();
     if (!info) return fail(404, "session does not exist");
     if (!isName(name)) return fail(400, "a gadget's name is lowercase letters, digits and hyphens");
@@ -326,6 +331,7 @@ export class Session extends DurableObject<Env> {
       session: info.id,
       owner: info.owner,
       blueprint,
+      requests,
     });
     return { ok: true, value: { blueprint, check } };
   }

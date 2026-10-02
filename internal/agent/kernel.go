@@ -137,6 +137,13 @@ type Draft struct {
 		ContentType string `json:"contentType,omitempty"`
 		Body        string `json:"body,omitempty"`
 		Error       string `json:"error,omitempty"`
+		Requests    []struct {
+			Method string `json:"method"`
+			Path   string `json:"path"`
+			Status int    `json:"status,omitempty"`
+			Body   string `json:"body,omitempty"`
+			Error  string `json:"error,omitempty"`
+		} `json:"requests,omitempty"`
 	} `json:"check"`
 }
 
@@ -288,9 +295,13 @@ func (k *Kernel) Run(ctx context.Context, auth Auth, ws, id, code string) (RunRe
 }
 
 // Draft stores a gadget the agent wrote as a draft for the session's owner.
-func (k *Kernel) Draft(ctx context.Context, auth Auth, ws, id, name, source string, capabilities []string) (Draft, error) {
+// checks are requests the kernel makes to it after GET /, to test it.
+func (k *Kernel) Draft(ctx context.Context, auth Auth, ws, id, name, source string, capabilities []string, checks []any) (Draft, error) {
 	var d Draft
 	body := map[string]any{"name": name, "source": source, "capabilities": capabilities}
+	if len(checks) > 0 {
+		body["checks"] = checks
+	}
 	err := k.do(ctx, auth, http.MethodPost, sessionPath(ws, id)+"/drafts", body, &d)
 	return d, err
 }

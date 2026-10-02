@@ -48,7 +48,7 @@ import { type CellRecord, MAX_DOC_BYTES, type ShareRole } from "./workspace";
 //   POST   /api/workspaces/:ws/sessions/:id/messages   {role, content, ...}
 //   POST   /api/workspaces/:ws/sessions/:id/complete   {model, request}
 //   POST   /api/workspaces/:ws/sessions/:id/runs       {code, input?}
-//   POST   /api/workspaces/:ws/sessions/:id/drafts     {name, source, capabilities?}
+//   POST   /api/workspaces/:ws/sessions/:id/drafts     {name, source, capabilities?, checks?}
 //   GET    /api/runs/:id                               {bound, keys}
 
 const MAX_BUNDLE_BYTES = 8 * 1024 * 1024;
@@ -446,7 +446,7 @@ async function sessions(
     const body = await readJson(request);
     if (typeof body.source !== "string") throw new ApiError(400, "source must be the gadget's JavaScript");
     const capabilities = body.capabilities ?? [];
-    return json(201, sessionResult(await session.draft(body.name, body.source, capabilities)));
+    return json(201, sessionResult(await session.draft(body.name, body.source, capabilities, checkRequests(body.checks))));
   }
   if (sub === "runs" && arg === undefined && method === "POST") {
     const body = await readJson(request);
@@ -492,6 +492,20 @@ function agentMessage(body: Record<string, any>): Omit<Message, "seq" | "at"> {
     return message;
   }
   throw new ApiError(400, "role must be user, assistant or tool");
+}
+
+// Requests to make to a draft after GET /, to check it: at most five.
+function checkRequests(value: unknown): { method: string; path: string; body?: unknown }[] {
+  if (value === undefined) return [];
+  const methods = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
+  if (!Array.isArray(value) || value.length > 5) throw new ApiError(400, "checks must be a list of at most 5 requests");
+  return value.map((r) => {
+    const method = String(r?.method ?? "GET").toUpperCase();
+    if (!methods.has(method) || typeof r?.path !== "string" || !r.path.startsWith("/") || r.path.length > 512) {
+      throw new ApiError(400, "each check is {method, path, body?}, with a path starting with /");
+    }
+    return r.body === undefined ? { method, path: r.path } : { method, path: r.path, body: r.body };
+  });
 }
 
 function sessionResult<T>(r: SessionResult<T>): T {

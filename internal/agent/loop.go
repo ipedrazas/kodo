@@ -215,7 +215,8 @@ func (t *turn) tool(ctx context.Context, call ToolCall) (string, string) {
 				}
 			}
 		}
-		d, err := t.kernel.Draft(ctx, t.auth, t.ws, t.id, name, source, capabilities)
+		checks, _ := args["checks"].([]any)
+		d, err := t.kernel.Draft(ctx, t.auth, t.ws, t.id, name, source, capabilities, checks)
 		if err != nil {
 			return toolError("the gadget was not stored: " + err.Error()), ""
 		}

@@ -43,7 +43,7 @@ var tools = []map[string]any{
 			"name": "write_gadget",
 			"description": "Submit a gadget you wrote. It is stored as a draft version of the named Blueprint for the user, " +
 				"who can try it, publish it and grant it capabilities; the same name again makes a new version. " +
-				"Answers {ok, name, version, check}: check says whether it loaded and what GET / returned.",
+				"Answers {ok, name, version, check}: check says whether it loaded, what GET / returned, and what each of your checks returned.",
 			"parameters": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -52,6 +52,19 @@ var tools = []map[string]any{
 					"capabilities": map[string]any{
 						"type": "array", "items": map[string]any{"type": "string"},
 						"description": "Every capability the gadget calls, e.g. web:hn.algolia.com/api/v1:read; empty if none",
+					},
+					"checks": map[string]any{
+						"type":        "array",
+						"description": "Up to 5 requests to make to the gadget after GET /, in order and against the same database, to test its API, e.g. a POST then the GET that should list what it stored",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"method": map[string]any{"type": "string"},
+								"path":   map[string]any{"type": "string"},
+								"body":   map[string]any{"description": "A JSON value, sent as JSON"},
+							},
+							"required": []string{"method", "path"},
+						},
 					},
 				},
 				"required": []string{"name", "source", "capabilities"},

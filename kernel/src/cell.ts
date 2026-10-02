@@ -109,9 +109,19 @@ export interface CheckSpec {
   session: string;
   owner: Owner;
   blueprint: BlueprintVersion;
+  // Requests to make after GET /, in order, against the same database.
+  requests?: CheckRequest[];
 }
 
-// What GET / on a draft answered, or why it did not.
+export interface CheckRequest {
+  method: string;
+  path: string;
+  // Sent as it is if a string, else as JSON.
+  body?: unknown;
+}
+
+// What GET / on a draft answered, and each request after it, or why they
+// did not answer. ok when none failed or answered 5xx.
 export interface CheckResult {
   ok: boolean;
   status?: number;
@@ -119,9 +129,19 @@ export interface CheckResult {
   // The beginning of the page.
   body?: string;
   error?: string;
+  requests?: CheckAnswer[];
+}
+
+export interface CheckAnswer {
+  method: string;
+  path: string;
+  status?: number;
+  body?: string;
+  error?: string;
 }
 
 const CHECK_BODY_BYTES = 2048;
+const CHECK_ANSWER_BYTES = 1024;
 
 export interface RunResult extends RunnerResult {
   id: string;
@@ -397,21 +417,46 @@ export class Cell extends DurableObject<Env> {
     } satisfies CellBinding);
     this.ctx.storage.kv.put("cell", spec.id);
     await this.ctx.storage.setAlarm(Date.now() + timeoutMs + RUN_CLEANUP_GRACE_MS);
+    const origin = `https://${spec.id}.g.check`;
+    const ask = (method: string, path: string, body?: unknown) => {
+      const headers: Record<string, string> = {
+        "x-kodo-user": spec.owner.user,
+        "x-kodo-email": spec.owner.email,
+        "x-kodo-role": "owner",
+        "x-kodo-workspace": spec.workspace,
+        origin,
+      };
+      let payload: string | undefined;
+      if (body !== undefined && body !== null && method !== "GET" && method !== "HEAD") {
+        payload = typeof body === "string" ? body : JSON.stringify(body);
+        if (typeof body !== "string") headers["content-type"] = "application/json";
+      }
+      const request = new Request(origin + path, { method, headers, body: payload });
+      return this.call(spec.id, (gadget) => gadget.fetch(request), timeoutMs);
+    };
     let result: CheckResult;
     try {
-      const request = new Request(`https://${spec.id}.g.check/`, {
-        headers: {
-          "x-kodo-user": spec.owner.user,
-          "x-kodo-email": spec.owner.email,
-          "x-kodo-role": "owner",
-          "x-kodo-workspace": spec.workspace,
-        },
-      });
-      const res = await this.call(spec.id, (gadget) => gadget.fetch(request), timeoutMs);
+      const res = await ask("GET", "/");
       const body = (await res.text()).slice(0, CHECK_BODY_BYTES);
       result = { ok: res.status < 500, status: res.status, contentType: res.headers.get("content-type") ?? "", body };
     } catch (err) {
       result = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    if (spec.requests?.length) {
+      result.requests = [];
+      for (const r of spec.requests) {
+        const answer: CheckAnswer = { method: r.method, path: r.path };
+        try {
+          const res = await ask(r.method, r.path, r.body);
+          answer.status = res.status;
+          answer.body = (await res.text()).slice(0, CHECK_ANSWER_BYTES);
+          if (res.status >= 500) result.ok = false;
+        } catch (err) {
+          answer.error = err instanceof Error ? err.message : String(err);
+          result.ok = false;
+        }
+        result.requests.push(answer);
+      }
     }
     await this.unbind();
     return result;

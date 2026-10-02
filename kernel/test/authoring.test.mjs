@@ -108,6 +108,28 @@ export class App extends Gadget { async fetch() { throw new Error("no page here"
     assert.match(throws.check.error, /no page here/);
   });
 
+  test("are checked with the requests the agent gives, against one database", async () => {
+    const { call, session } = await turn();
+    const checks = [
+      { method: "POST", path: "/api/messages", body: { text: "ping" } },
+      { method: "GET", path: "/api/messages" },
+    ];
+    const good = ok(await call("POST", `/workspaces/team/sessions/${session.id}/drafts`, { name: "checked", source: echo("v1"), checks }), 201);
+    assert.equal(good.check.ok, true, JSON.stringify(good.check));
+    assert.deepEqual(good.check.requests.map((r) => [r.method, r.path, r.status]), [["POST", "/api/messages", 200], ["GET", "/api/messages", 200]]);
+    assert.deepEqual(JSON.parse(good.check.requests[0].body), { from: "This Gadget", text: "ping" });
+    assert.deepEqual(JSON.parse(good.check.requests[1].body), ["ping"]);
+
+    // What the agent wrote on k3s: a page that serves, and an API that uses
+    // the constructor's ctx where it meant this.ctx.
+    const broken = echo("v2").replace('this.ctx.storage.sql.exec("INSERT', 'ctx.storage.sql.exec("INSERT');
+    const bad = ok(await call("POST", `/workspaces/team/sessions/${session.id}/drafts`, { name: "checked", source: broken, checks }), 201);
+    assert.equal(bad.check.status, 200);
+    assert.equal(bad.check.ok, false);
+    assert.match(bad.check.requests[0].error, /ctx is not defined/);
+    assert.equal((await call("POST", `/workspaces/team/sessions/${session.id}/drafts`, { name: "checked", source: broken, checks: [{ path: "nope" }] })).status, 400);
+  });
+
   test("are not kept if they cannot be audited", async () => {
     const { draft } = await turn();
     kernel.gatekeeper.refuseEvents = true;

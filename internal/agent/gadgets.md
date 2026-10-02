@@ -12,7 +12,7 @@ import { Gadget } from "kodo";
 export class App extends Gadget {
   constructor(ctx, env) {
     super(ctx, env);
-    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS notes (
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS notes (
       id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, author TEXT, at INTEGER NOT NULL)`);
   }
 
@@ -60,6 +60,8 @@ load();
 </script></body></html>`;
 ```
 
+Always write `this.ctx`, also in the constructor: `ctx` exists only as the constructor's parameter, and a method that uses it fails with "ctx is not defined".
+
 Inside the page string, a browser-side template literal needs its backticks and `${` escaped (`\``, `\${`); string concatenation is simpler. Put text into the page with `textContent`, never `innerHTML` with user data.
 
 ## What the gadget can use
@@ -94,4 +96,4 @@ Declare in `write_gadget` every capability the gadget calls, as `<provider>:<res
 
 ## Submitting
 
-Call `write_gadget` with a short lowercase `name` (letters, digits, hyphens), the whole `source`, and `capabilities`. The answer says whether the kernel could load it and what `GET /` returned; if it failed, fix it and submit again under the same name, which makes a new version. Then tell the user it is a draft they can try, publish, and grant capabilities to from the chat.
+Call `write_gadget` with a short lowercase `name` (letters, digits, hyphens), the whole `source`, `capabilities`, and `checks`: requests that exercise every API route, in order, such as a POST that stores something and then the GET that should list it. The kernel loads the gadget in a throwaway cell, asks for `GET /`, then makes your checks against the same database, and answers with each status and body. If anything failed or answered wrongly, fix it and submit again under the same name, which makes a new version. Nothing is granted in the check, so a route that needs a capability should answer its "not granted" error there. Then tell the user it is a draft they can try, publish, and grant capabilities to from the chat.
