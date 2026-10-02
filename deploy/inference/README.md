@@ -12,6 +12,7 @@ Gatekeeper ─ checks the grant and the body, sets model=default,
 kodo-inference.envoy-gateway-system.svc:80  (ClusterIP; NetworkPolicy: Gatekeeper pods only)
   api_key_auth ─ ext_proc (AI Gateway) ─ rate limit (Redis) ─ router
   │ default ─► OpenRouter, meta-llama/llama-3.1-8b-instruct   (key from Secret openrouter)
+  │ agent   ─► OpenRouter, deepseek/deepseek-v4-flash         (what the agent thinks with)
   │ sim     ─► sim.kodo-inference.svc:8000, an OpenAI-compatible simulator
   ▼
 answer + usage ─► Gatekeeper (audit: metered) ─► kernel (cell counts tokens) ─► gadget

@@ -266,7 +266,7 @@ import json, sys
 path, session, web_run, approval = sys.argv[1:]
 recs = [json.loads(l) for l in open(path) if l.strip()]
 mine = [r for r in recs if r.get("blueprint") == "agent" and r.get("version") == session]
-model = [r for r in mine if r.get("cell") == session and r.get("grant") == "inference:model/agent:invoke"]
+model = [r for r in mine if r.get("cell") == session and r.get("decision") == "metered"]
 web = [r for r in mine if r.get("cell") == web_run and r.get("decision") == "allowed"]
 sent = [r for r in mine if r.get("approval") == approval]
 assert model and web and sent, (len(model), len(web), len(sent))

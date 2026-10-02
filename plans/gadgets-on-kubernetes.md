@@ -13,15 +13,17 @@ Durable decisions that apply across all phases:
 - **Gadget API**: our own, not Cloudflare OS compatibility. A gadget is a bundle whose main module exports a Durable Object class. The kernel loads it by digest with the Worker Loader and runs it as a facet of its cell, with its own SQLite database, no ambient network, and only the bindings the kernel passes in.
 - **Cell**: one kernel Durable Object per gadget instance, holding the instance's Blueprint version and grants, with the gadget as its facet. Facets cannot set alarms or hold WebSockets in celld 0.6.0, so the cell holds schedules and WebSockets on the gadget's behalf and passes events to it as calls. Every call into a gadget is bounded in time and answered with an error rather than left hanging.
 - **State**: everything durable lives in the bucket. There is no database. The per-workspace registry of cells, owners, shares and grants is itself a Durable Object (one per Workspace).
-- **Key models**: Fleet, Workspace, Blueprint (name, version, bundle digest, capabilities, tier), Cell (workspace, cell id, blueprint version, owner), Grant (user, cell, capability), Share (user, cell, role).
-- **Go services**: the operator, the Gatekeeper and a small metrics exporter. Go does not sit on the request path to a gadget.
+- **Key models**: Fleet, Workspace, Blueprint (name, version, bundle digest, capabilities, tier), Cell (workspace, cell id, blueprint version, owner), Grant (user, cell, capability), Share (user, cell, role), Session (workspace, session id, owner, grants, transcript), Doc (workspace, path, markdown).
+- **Go services**: the operator, the Gatekeeper, the agent and a small metrics exporter. Go does not sit on the request path to a gadget.
+- **Agent**: a stateless Deployment serving the chat at `app.<domain>/chat/`. Sessions are `Session` Durable Objects of the kernel, registered in their workspace, so the agent keeps nothing. It creates a session or starts a turn with the user's ID token; the kernel answers a turn with a turn token, HMAC-signed with the fleet's kernel key, that reaches only that session (its transcript, its models, running code, the workspace's docs) until the turn ends or after 5 minutes. The agent's model is a session grant, `inference:model/agent:invoke`, which new sessions get. Workspace markdown docs are listed in the system prompt by path and description and read with a tool.
+- **Ephemeral cells**: the agent's code runs in a new cell per run, never served, with exactly its session's grants, deleted when the run ends (or by its alarm if the node dies). Every run loads the same runner bundle, because a loaded bundle's memory is never freed; SES locks that shared isolate down and each run evaluates in its own Compartment. The code gets no ArrayBuffers or typed arrays, whose memory celld's heap limit does not cover. Limits: 60 s, 2 s of CPU and 20 capability calls per run.
 - **CRDs**: `Fleet`, `Blueprint`, `Workspace` under `kodo.dev/v1alpha1`. Cells never go in etcd.
 - **Gatekeeper state**: the Gatekeeper is stateless. Encrypted tokens and approvals are bucket objects under prefixes only the Gatekeeper's credentials can read, never a fleet's. Every approval state change (pending → executing on approval → done or failed; pending → rejected or expired) is a write conditional on the object's ETag, so two replicas cannot claim the same approval. An approval left executing past a stale limit (a replica died mid-call) is reported as failed, never retried.
 - **Secrets**: tokens are encrypted through a vault interface and only the ciphertext is stored. OpenBao's transit engine is the first backend, with a derived key so each ciphertext is bound to its user and provider; a cloud KMS can follow. The Gatekeeper logs in with an AppRole (Kubernetes auth is also supported) whose policy allows only encrypt and decrypt. Platform secrets (bucket credentials, OIDC client secret, DNS-01 credentials) reach the cluster through External Secrets, from OpenBao where it is available. OpenBao is supported, not required.
 - **Bucket layout**: celld owns the layout of a fleet's bucket. Gadget bundles go through an R2 binding, which celld stores under `r2/bundles/sha256/<digest>.js`. Blueprint versions, workspaces and cell bindings are Durable Objects of the kernel (`Catalog`, `Workspace`, `Cell`), so they live in celld's cell state rather than as objects of ours. Objects outside any fleet (`vault/<user>/`, `approvals/<user>/<id>.json`, `audit/<yyyy>/<mm>/<dd>/`) live in the Gatekeeper's own bucket, with credentials scoped so a fleet's cannot read it; per-bucket scoping works on any S3 provider, where per-prefix policies do not.
 - **Storage contract**: whatever `celld diagnose` accepts, which includes conditional writes and ranged reads. A provider that fails it is unsupported.
 - **Hostnames**: `<cell-id>.g.<domain>` for cells, `app.<domain>` for the shell UI, the agent chat and the API. One wildcard certificate via cert-manager DNS-01; celld does not terminate TLS.
-- **API**: under `app.<domain>/api/`, served by the kernel: workspaces, blueprints, cells, grants, shares.
+- **API**: under `app.<domain>/api/`, served by the kernel: workspaces, blueprints, cells, grants, shares, docs, sessions and runs.
 - **Identity**: OIDC at the gateway (Gateway API, Envoy Gateway as reference), with one session cookie on the parent domain covering the app and every cell. The gateway forwards the user's ID token in `x-kodo-identity`; the kernel verifies it against the issuer's keys and strips it, and the session cookies, before a gadget sees the request. The operator uses a per-fleet admin token instead. Cells are shared by email as viewer or editor, and every cell refuses writes and WebSockets from other origins.
 - **Capabilities**: `<provider>:<resource>:<verb>`, declared by the Blueprint (with `*` for one resource segment), granted per instance by the cell's owner as concrete capabilities. A grant becomes a binding in the gadget's `this.grants`, which calls back into the kernel, which signs the call with its fleet's key and asserts the cell, owner and grants to the Gatekeeper. The Gatekeeper alone decides. Tokens never enter a fleet; users hand them to the Gatekeeper directly at `app.<domain>/gatekeeper/`.
 - **Isolation**: a gadget is a V8 isolate in a process shared with other gadgets of the same fleet; celld makes no claim beyond that. The kernel boundary is gVisor on the fleet's pods. Mutually distrusting tenants get a fleet each.
@@ -34,6 +36,7 @@ Durable decisions that apply across all phases:
 - **Environments**: kind with SeaweedFS for local development and CI (MinIO no longer publishes images); the k3s cluster with gVisor and Tigris for integration, performance and demos.
 - **Node disks**: fleet nodes need low fsync latency; celld's write latency and follower health follow it directly (Phase 1 measured about 100 ms per fsync on the k3s nodes and 120 ms per write).
 - **Loaded code is memory**: each distinct gadget bundle costs about 7 MiB per node in celld 0.6.0 and is not released, so the number of distinct bundles a fleet serves is bounded by node memory until upstream fixes it.
+- **ArrayBuffers are outside the heap limit**: celld 0.6.0 limits each isolate's V8 heap (128 MiB) but not ArrayBuffer memory; under `celld dev` one call filled 768 MiB of them, most of a fleet node's 1 GiB. The agent's code is kept off them; gadgets are not yet, which belongs in the upstream report.
 - **Out of scope for v1**: the container tier, the wider Cloudflare API surface as a gadget-facing API, multi-region fleets.
 
 ---
@@ -254,7 +257,25 @@ Deploy the inference gateway (LiteLLM or Envoy AI Gateway, chosen in this phase;
 
 ---
 
-## Phase 10: Agent code execution
+## Phase 10: Agent code execution (done)
+
+In [#17](https://github.com/ipedrazas/kodo/pull/17), verified on the k3s cluster by `test/e2e/agent.sh` (`task k3s:agent-test`) against the real gateway, agent, fleet under gVisor, Gatekeeper, inference gateway with DeepSeek V4 Flash on OpenRouter, Hacker News' public API and Resend; also tested in Go (`internal/agent/agent_test.go`) and under `celld dev` (`kernel/test/agent.test.mjs`). The contract for the agent's code is [kernel/AGENT.md](../kernel/AGENT.md). Decisions:
+
+- The agent is a stateless Go Deployment in `kodo-system`, serving the chat at `app.<domain>/chat/` behind the same login. Sessions are `Session` Durable Objects of the kernel, registered in their workspace, so the history is the kernel's and survives any restart of the agent.
+- The agent has no authority of its own. It uses the user's ID token only for the request that creates a session or starts a turn; the kernel answers a turn with a turn token, signed with the fleet's kernel key, that reaches only that session (transcript, models, runs, the workspace's docs), cannot change its grants or start another turn, and stops working when the turn ends (at most 5 minutes). A turn cut short by a restart says so; one the agent never ends is reported by the kernel.
+- "The user's grants" are the session's: the owner grants a chat capabilities as they would a cell, and every run gets exactly those. New sessions hold `inference:model/agent:invoke`, the model the agent thinks with, so its calls go through the Gatekeeper as the session (Blueprint `agent`, version the session's id), count against the owner's and workspace's budgets, and are audited like any other.
+- Every run loads one runner bundle, because celld never frees a loaded bundle's memory; SES locks the shared isolate down and each run gets a Compartment of its own. Runs get no ArrayBuffers (see Findings). Limits per run: 60 s, 2 s of CPU, 20 capability calls; per turn: 10 model calls.
+- An ephemeral cell is never served, is deleted when its run ends or by its own alarm if its node stops, and hands the approvals it queued to its session, which follows them and adds an event to the transcript when each settles.
+- Workspace docs are markdown in the `Workspace` object, written with the admin token. The system prompt lists them by path and description; the agent reads one with a tool when it needs it.
+- Sessions are rows in the workspace's usage report, with their own and their runs' tokens.
+
+Findings:
+
+- `eval` and `new Function` work in loaded gadgets in celld 0.6.0, and the cells of one bundle on a node share one isolate and its globals. Without SES, one run could leave a hook in a built-in that the next run, perhaps with other grants, would call.
+- celld implements web APIs in JavaScript in the gadget's own realm. Lockdown removed `TextDecoder.prototype._decodeNative`, which broke `request.text()`; the runner binds it into `decode` before lockdown and checks decoding works after.
+- celld limits each isolate's heap (128 MiB, `CELLD_V8_HEAP_LIMIT_MB`) and recovers from a run that reaches it, but not ArrayBuffers: under `celld dev` one call filled 768 MiB of them in 90 ms, faster than any RSS check could react. Hence no ArrayBuffers for runs; gadgets can still do this.
+- A runaway run holds up the other runs on its node until its CPU limit, since they share a thread; gadgets do not wait: on k3s a notes cell answered in 60 ms during one.
+- DeepSeek V4 Flash called tools reliably in every e2e turn; one session's 9 model calls over 5 turns used about 16k tokens. Each model call is two audit records, `allowed` and `metered`.
 
 **User stories**: agent as a tenant; ephemeral cells.
 
@@ -264,12 +285,12 @@ The agent service and the chat surface at `app.<domain>`, with session state in 
 
 ### Acceptance criteria
 
-- [ ] A chat request results in code executed in an ephemeral cell and a result returned
-- [ ] The ephemeral cell has exactly the user's grants, never more
-- [ ] A side-effecting call from agent code goes through the approval queue
-- [ ] The ephemeral cell and its state are gone after the run
-- [ ] Runaway agent code is stopped by CPU and request limits without affecting other cells
-- [ ] Chat history survives an agent service restart
+- [x] A chat request results in code executed in an ephemeral cell and a result returned
+- [x] The ephemeral cell has exactly the user's grants, never more
+- [x] A side-effecting call from agent code goes through the approval queue
+- [x] The ephemeral cell and its state are gone after the run
+- [x] Runaway agent code is stopped by CPU and request limits without affecting other cells
+- [x] Chat history survives an agent service restart
 
 ---
 

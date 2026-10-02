@@ -50,12 +50,18 @@ const chatPage = `<!doctype html>
   .grant { font: 13px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 1rem; padding: .05rem .5rem; }
   .grant button { border: 0; background: none; padding: 0 0 0 .3rem; cursor: pointer; color: var(--muted); }
   #grant-form { display: flex; gap: .4rem; flex-wrap: wrap; }
-  #grant-form input { font: 13px ui-monospace, monospace; min-width: 22rem; flex: 1; }
+  #grant-form input { font: 13px ui-monospace, monospace; min-width: min(22rem, 100%); flex: 1; }
   .hint { font-size: .85rem; }
   #error { color: #b91c1c; margin: .4rem 1rem 0; min-height: 0; }
   #empty { margin: auto; text-align: center; max-width: 30rem; }
   [hidden] { display: none !important; }
-  @media (max-width: 700px) { aside { display: none; } }
+  @media (max-width: 700px) {
+    main { flex-direction: column; }
+    aside { width: auto; border-right: 0; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: .5rem 1rem; overflow: visible; }
+    aside form { margin: 0; flex: 1 1 12rem; }
+    #sessions { display: flex; gap: .3rem; overflow-x: auto; margin: 0; width: 100%; }
+    #sessions li a { max-width: 12rem; }
+  }
 </style>
 </head>
 <body>
@@ -160,7 +166,14 @@ async function open(id) {
   await loadSessions();
 }
 
-// Simple markdown: fenced code, inline code and paragraphs, all as text.
+// Simple markdown: fenced code, inline code, bold and paragraphs, all as
+// text.
+function inline(p, text) {
+  text.split(/\x60([^\x60]+)\x60/).forEach((bit, j) => {
+    if (j % 2) { p.append(el("code", {}, bit)); return; }
+    bit.split(/\*\*([^*]+)\*\*/).forEach((b, k) => p.append(k % 2 ? el("strong", {}, b) : b));
+  });
+}
 function prose(text) {
   const box = el("div", { class: "msg assistant" });
   const parts = text.split(/\x60\x60\x60[^\n]*\n?/);
@@ -169,7 +182,7 @@ function prose(text) {
     for (const para of part.split(/\n{2,}/)) {
       if (!para.trim()) continue;
       const p = el("p");
-      para.split(/\x60([^\x60]+)\x60/).forEach((bit, j) => p.append(j % 2 ? el("code", {}, bit) : bit));
+      inline(p, para);
       box.append(p);
     }
   });
