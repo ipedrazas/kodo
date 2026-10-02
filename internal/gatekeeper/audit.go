@@ -52,6 +52,10 @@ type Record struct {
 	Status int `json:"status,omitempty"`
 	// What a metered call consumed.
 	Usage *Usage `json:"usage,omitempty"`
+	// For an authored or published Blueprint version: its bundle's digest
+	// and the capabilities it declares. Cell is then the agent session.
+	Bundle       string   `json:"bundle,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // Audit appends records to audit/<yyyy>/<mm>/<dd>/ in the store, one object

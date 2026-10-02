@@ -202,6 +202,25 @@ func (t *turn) tool(ctx context.Context, call ToolCall) (string, string) {
 			return toolError("the run did not happen: " + err.Error()), ""
 		}
 		return runResult(r, t.app), r.ID
+	case "read_gadget_guide":
+		return gadgetGuide, ""
+	case "write_gadget":
+		name, _ := args["name"].(string)
+		source, _ := args["source"].(string)
+		capabilities := []string{}
+		if list, ok := args["capabilities"].([]any); ok {
+			for _, c := range list {
+				if s, ok := c.(string); ok && s != "" {
+					capabilities = append(capabilities, s)
+				}
+			}
+		}
+		checks, _ := args["checks"].([]any)
+		d, err := t.kernel.Draft(ctx, t.auth, t.ws, t.id, name, source, capabilities, checks)
+		if err != nil {
+			return toolError("the gadget was not stored: " + err.Error()), ""
+		}
+		return draftResult(d), ""
 	case "read_doc":
 		path, _ := args["path"].(string)
 		doc, err := t.kernel.Doc(ctx, t.auth, t.ws, path)
@@ -221,6 +240,25 @@ func (t *turn) tool(ctx context.Context, call ToolCall) (string, string) {
 
 func toolError(msg string) string {
 	b, _ := json.Marshal(map[string]any{"ok": false, "error": msg})
+	return string(b)
+}
+
+// draftResult is what the model, and the chat page, learn of a draft.
+func draftResult(d Draft) string {
+	out := map[string]any{
+		"ok":           d.Check.OK,
+		"name":         d.Blueprint.Name,
+		"version":      d.Blueprint.Version,
+		"status":       d.Blueprint.Status,
+		"capabilities": d.Blueprint.Capabilities,
+		"check":        d.Check,
+	}
+	if d.Check.OK {
+		out["note"] = "Stored as a draft. The chat shows the user a card to try it and publish it; they grant capabilities to the cell they open."
+	} else {
+		out["note"] = "Stored, but it does not work: fix it and submit it again under the same name."
+	}
+	b, _ := json.Marshal(out)
 	return string(b)
 }
 

@@ -113,6 +113,7 @@ func (s *Server) Internal() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/calls", s.handleCall)
 	mux.HandleFunc("POST /v1/approvals/query", s.queryApprovals)
+	mux.HandleFunc("POST /v1/events", s.handleEvent)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok\n") })
 	return mux
 }
@@ -373,6 +374,9 @@ func (s *Server) record(ctx context.Context, rec Record) bool {
 		// Logged with its upstream status once the call returns.
 	case Connected, Disconnected:
 		s.log().Info("connection", "decision", rec.Decision, "provider", rec.Provider)
+	case Authored, Published:
+		s.log().Info("blueprint", "decision", rec.Decision, "fleet", rec.Fleet, "workspace", rec.Workspace,
+			"blueprint", rec.Blueprint, "version", rec.Version, "session", rec.Cell)
 	case Metered:
 		if rec.Usage != nil {
 			s.log().Info("usage", "fleet", rec.Fleet, "workspace", rec.Workspace, "blueprint", rec.Blueprint,

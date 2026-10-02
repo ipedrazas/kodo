@@ -34,14 +34,15 @@ Uploading bundles, publishing and configuring workspaces need the admin token. A
 | --- | --- | --- | --- |
 | GET | `/api/version` | | `{build}`, the kernel image's build identifier |
 | POST | `/api/bundles` | gadget source | 201 `{digest}` |
-| GET | `/api/blueprints` | | `{blueprints: [name]}` |
-| GET | `/api/blueprints/:name` | | `{name, versions: [...]}` |
+| GET | `/api/blueprints` | | `{blueprints: [name]}`: the names with a published version, and the caller's drafts |
+| GET | `/api/blueprints/:name` | | `{name, versions: [...]}`, each with `status` (`draft` or `published`) and, for the agent's, `author`, `session`, `workspace` and `publishedBy` |
 | PUT | `/api/blueprints/:name/:version` | `{bundle, capabilities?, tier?}` | 201, or 409 if already published |
+| POST | `/api/blueprints/:name/:version/publish` | | Publishes a draft the agent wrote: its author only (or the admin token), never a turn token. Recorded in the Gatekeeper's audit log first; a 503 if it cannot be, and the draft stays a draft |
 | PUT | `/api/workspaces/:ws` | `{quota?}` (default 100) | Creates or updates the workspace |
 | GET | `/api/workspaces/:ws` | | `{name, quota, cells}` |
 | GET | `/api/workspaces/:ws/usage[?month=YYYY-MM]` | | Usage in a month (default this one, UTC): `{workspace, month, totals, owners, cells}`. Each has `requests` (HTTP requests and WebSocket messages that reached the gadget, written a few seconds after use, so a cell that stops in that time loses a few), `storageBytes` (the gadget's database, as last measured) and `inference` (model calls and input, output and total tokens; per granted model for a cell); totals and owners add `cells`, `activeCells` and `sessions`. Sessions with the agent are rows too, with `kind: "session"` and Blueprint `agent`: their turns and runs as requests, and the tokens of their model calls and their runs'. The admin token sees every cell and session; a user sees the ones they own. |
 | GET | `/api/workspaces/:ws/cells` | | `{cells: [...]}` |
-| POST | `/api/workspaces/:ws/cells` | `{blueprint, version?}` (default: latest) | 201 `{id, blueprint, version, owner, shares, createdAt}`, or 409 over quota |
+| POST | `/api/workspaces/:ws/cells` | `{blueprint, version?}` (default: the latest published, or for its author the latest draft of a name with none published) | 201 `{id, blueprint, version, owner, shares, createdAt}`, or 409 over quota. A draft only for its author |
 | GET | `/api/workspaces/:ws/cells/:id` | | The cell |
 | PATCH | `/api/workspaces/:ws/cells/:id` | `{version}` | Moves the cell to another version of its Blueprint |
 | DELETE | `/api/workspaces/:ws/cells/:id` | | 204; deletes the gadget's storage |
@@ -65,6 +66,7 @@ Uploading bundles, publishing and configuring workspaces need the admin token. A
 | POST | `/api/workspaces/:ws/sessions/:id/messages` | `{role, content, tool_calls?, tool_call_id?, name?, run?}` | Appends the agent's message: `user`, `assistant` (with chat completion `tool_calls`) or `tool`. Only with the turn token. The kernel writes `event`s itself: an approval settled, a turn that ran out of time |
 | POST | `/api/workspaces/:ws/sessions/:id/complete` | `{model, request}` | Calls `inference:model/<model>:invoke` with the chat completion `request`, if the session holds that grant, as the session; answers with the model's status and body |
 | POST | `/api/workspaces/:ws/sessions/:id/runs` | `{code, input?}` | Runs the code in an ephemeral cell: `{id, ok, value, error, logs, approvals, calls, ms}` |
+| POST | `/api/workspaces/:ws/sessions/:id/drafts` | `{name, source, capabilities?, checks?}` | 201 `{blueprint, check}`: stores a gadget the agent wrote as the next draft version (1, 2, ...) of `name` for the session's owner, records that they authored it in the Gatekeeper's audit log, and loads it once in an ephemeral cell; `check` is what `GET /` answered, then each of up to five `checks` (`{method, path, body?}`, against the same database), and `ok` unless one failed or answered 5xx. A name with versions by anyone else is a 409. At most 20 per session and 96 KiB each |
 | GET | `/api/runs/:id` | | `{bound, keys}`: what is left of a run's cell; nothing, once it has run (admin token) |
 
 Owner, editor and viewer: the owner may do anything, including sharing, moving and deleting the cell; an editor may use it fully; a viewer may only read it (GET and HEAD, no WebSockets). Shares are keyed by the email in the caller's ID token.

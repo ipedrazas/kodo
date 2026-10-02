@@ -1,9 +1,15 @@
 package agent
 
 import (
+	_ "embed"
 	"fmt"
 	"strings"
 )
+
+// gadgetGuide is what read_gadget_guide answers: how to write a gadget.
+//
+//go:embed gadgets.md
+var gadgetGuide string
 
 // Tools the agent's model may call.
 var tools = []map[string]any{
@@ -20,6 +26,48 @@ var tools = []map[string]any{
 					"code": map[string]any{"type": "string", "description": "The body of an async JavaScript function."},
 				},
 				"required": []string{"code"},
+			},
+		},
+	},
+	{
+		"type": "function",
+		"function": map[string]any{
+			"name":        "read_gadget_guide",
+			"description": "Read how to write a kodo gadget: the module's shape, what it can use, capabilities and an example. Read it before write_gadget.",
+			"parameters":  map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+	},
+	{
+		"type": "function",
+		"function": map[string]any{
+			"name": "write_gadget",
+			"description": "Submit a gadget you wrote. It is stored as a draft version of the named Blueprint for the user, " +
+				"who can try it, publish it and grant it capabilities; the same name again makes a new version. " +
+				"Answers {ok, name, version, check}: check says whether it loaded, what GET / returned, and what each of your checks returned.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name":   map[string]any{"type": "string", "description": "Lowercase letters, digits and hyphens, e.g. echo"},
+					"source": map[string]any{"type": "string", "description": "The whole JavaScript module"},
+					"capabilities": map[string]any{
+						"type": "array", "items": map[string]any{"type": "string"},
+						"description": "Every capability the gadget calls, e.g. web:hn.algolia.com/api/v1:read; empty if none",
+					},
+					"checks": map[string]any{
+						"type":        "array",
+						"description": "Up to 5 requests to make to the gadget after GET /, in order and against the same database, to test its API, e.g. a POST then the GET that should list what it stored",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"method": map[string]any{"type": "string"},
+								"path":   map[string]any{"type": "string"},
+								"body":   map[string]any{"description": "A JSON value, sent as JSON"},
+							},
+							"required": []string{"method", "path"},
+						},
+					},
+				},
+				"required": []string{"name", "source", "capabilities"},
 			},
 		},
 	},
@@ -71,6 +119,11 @@ If a task needs a capability the session does not hold, say exactly which one (f
 
 Calls that send, write or delete do not happen at once: they answer 202 and wait for the user's approval at %s/gatekeeper/. Tell the user what is waiting; the chat will say when it is approved or rejected.
 `, app, app)
+	b.WriteString(`
+## Writing gadgets
+
+When the user asks for a gadget (an app, a page, a tool they can open), write it: call read_gadget_guide first, then write_gadget with the module. Do not look for gadget docs elsewhere, and do not use run_code to write one. A gadget is a draft until the user publishes it; you cannot publish it, and it gets no capability until the user grants one.
+`)
 	if len(docs) > 0 {
 		b.WriteString("\n## Workspace documents\n\nRead one with read_doc before relying on what it covers.\n\n")
 		for _, d := range docs {

@@ -11,6 +11,7 @@ import {
   gatekeeper,
 } from "./host";
 import { CALLER_HEADER, CELL_HEADER, sha256Hex, text } from "./http";
+import { runnerDigest } from "./runner";
 import type { Caller } from "./identity";
 import type { Owner, ShareRole } from "./workspace";
 
@@ -100,6 +101,47 @@ export interface RunSpec {
   timeoutMs: number;
   callLimit: number;
 }
+
+// A draft to check; see Cell.check.
+export interface CheckSpec {
+  id: string;
+  workspace: string;
+  session: string;
+  owner: Owner;
+  blueprint: BlueprintVersion;
+  // Requests to make after GET /, in order, against the same database.
+  requests?: CheckRequest[];
+}
+
+export interface CheckRequest {
+  method: string;
+  path: string;
+  // Sent as it is if a string, else as JSON.
+  body?: unknown;
+}
+
+// What GET / on a draft answered, and each request after it, or why they
+// did not answer. ok when none failed or answered 5xx.
+export interface CheckResult {
+  ok: boolean;
+  status?: number;
+  contentType?: string;
+  // The beginning of the page.
+  body?: string;
+  error?: string;
+  requests?: CheckAnswer[];
+}
+
+export interface CheckAnswer {
+  method: string;
+  path: string;
+  status?: number;
+  body?: string;
+  error?: string;
+}
+
+const CHECK_BODY_BYTES = 2048;
+const CHECK_ANSWER_BYTES = 1024;
 
 export interface RunResult extends RunnerResult {
   id: string;
@@ -359,6 +401,67 @@ export class Cell extends DurableObject<Env> {
     return { ...result, id: spec.id, calls, ms: Date.now() - started };
   }
 
+  // Loads a draft the agent wrote in this cell, which must be new, asks it
+  // for its page as its owner would, and deletes the cell: whether the draft
+  // loads and serves, before anyone uses it. It gets no grants.
+  async check(spec: CheckSpec): Promise<CheckResult> {
+    if (this.binding()) throw new Error(`cell ${spec.id} already exists`);
+    const timeoutMs = 10_000;
+    this.ctx.storage.kv.put("binding", {
+      workspace: spec.workspace,
+      blueprint: spec.blueprint,
+      owner: spec.owner,
+      shares: {},
+      grants: [],
+      run: { session: spec.session, calls: 0, callLimit: 0 },
+    } satisfies CellBinding);
+    this.ctx.storage.kv.put("cell", spec.id);
+    await this.ctx.storage.setAlarm(Date.now() + timeoutMs + RUN_CLEANUP_GRACE_MS);
+    const origin = `https://${spec.id}.g.check`;
+    const ask = (method: string, path: string, body?: unknown) => {
+      const headers: Record<string, string> = {
+        "x-kodo-user": spec.owner.user,
+        "x-kodo-email": spec.owner.email,
+        "x-kodo-role": "owner",
+        "x-kodo-workspace": spec.workspace,
+        origin,
+      };
+      let payload: string | undefined;
+      if (body !== undefined && body !== null && method !== "GET" && method !== "HEAD") {
+        payload = typeof body === "string" ? body : JSON.stringify(body);
+        if (typeof body !== "string") headers["content-type"] = "application/json";
+      }
+      const request = new Request(origin + path, { method, headers, body: payload });
+      return this.call(spec.id, (gadget) => gadget.fetch(request), timeoutMs);
+    };
+    let result: CheckResult;
+    try {
+      const res = await ask("GET", "/");
+      const body = (await res.text()).slice(0, CHECK_BODY_BYTES);
+      result = { ok: res.status < 500, status: res.status, contentType: res.headers.get("content-type") ?? "", body };
+    } catch (err) {
+      result = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    if (spec.requests?.length) {
+      result.requests = [];
+      for (const r of spec.requests) {
+        const answer: CheckAnswer = { method: r.method, path: r.path };
+        try {
+          const res = await ask(r.method, r.path, r.body);
+          answer.status = res.status;
+          answer.body = (await res.text()).slice(0, CHECK_ANSWER_BYTES);
+          if (res.status >= 500) result.ok = false;
+        } catch (err) {
+          answer.error = err instanceof Error ? err.message : String(err);
+          result.ok = false;
+        }
+        result.requests.push(answer);
+      }
+    }
+    await this.unbind();
+    return result;
+  }
+
   // What is left of this cell: for checking that an ephemeral cell is gone.
   async residue(): Promise<{ bound: boolean; keys: number }> {
     return { bound: this.binding() !== undefined, keys: [...this.ctx.storage.kv.list()].length };
@@ -599,9 +702,11 @@ export class Cell extends DurableObject<Env> {
     // The loaded Worker is shared by every cell running this bundle on this
     // node, so its env holds only the host binding; the per-cell identity
     // travels in the facet's props.
-    // The runner gets the agent's CPU limit; the loader keeps one Worker
-    // per digest, so every run of it shares that limit.
-    const cpuMs = binding.run ? Number(this.env.AGENT_RUN_CPU_MS) || 2000 : Number(this.env.GADGET_CPU_MS) || 5000;
+    // The runner gets the agent's CPU limit, any other bundle a gadget's.
+    // The loader keeps one Worker per digest with the limit it was first
+    // loaded with, so the limit follows the digest, not the cell.
+    const cpuMs =
+      digest === (await runnerDigest()) ? Number(this.env.AGENT_RUN_CPU_MS) || 2000 : Number(this.env.GADGET_CPU_MS) || 5000;
     const worker = this.env.LOADER.get(digest, () => ({
       compatibilityDate: "2026-09-01",
       mainModule: "gadget.js",

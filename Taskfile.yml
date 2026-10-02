@@ -355,6 +355,11 @@ tasks:
     cmds:
       - test/e2e/agent.sh
 
+  k3s:authoring-test:
+    desc: Check that the agent writes, and the user publishes, gadgets end to end on hiddenfield.dev (OPENROUTER_API_KEY for the agent's model)
+    cmds:
+      - test/e2e/authoring.sh
+
   k3s:gatekeeper-test:
     desc: Check the Gatekeeper read path end to end on hiddenfield.dev (GITHUB_TOKEN, or the gh CLI's token)
     cmds:

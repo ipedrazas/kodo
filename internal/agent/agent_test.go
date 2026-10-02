@@ -25,6 +25,7 @@ type fakeKernel struct {
 	model    func(n int, req map[string]any) (int, string)
 	run      func(code string) RunResult
 	docs     map[string]string
+	drafts   []map[string]any
 	auths    []string // the auth header of every call after the turn started
 	block    chan struct{}
 }
@@ -123,6 +124,17 @@ func (f *fakeKernel) serve(w http.ResponseWriter, r *http.Request) {
 		var b struct{ Code string }
 		_ = json.Unmarshal(body, &b)
 		writeJSON(w, 200, f.run(b.Code))
+	case r.Method == "POST" && path == "/sessions/s1/drafts":
+		if !needTurn() {
+			return
+		}
+		var b map[string]any
+		_ = json.Unmarshal(body, &b)
+		f.drafts = append(f.drafts, b)
+		writeJSON(w, 201, map[string]any{
+			"blueprint": map[string]any{"name": b["name"], "version": "1", "status": "draft", "capabilities": b["capabilities"]},
+			"check":     map[string]any{"ok": true, "status": 200, "body": "<h1>Echo</h1>"},
+		})
 	case r.Method == "GET" && path == "/docs":
 		writeJSON(w, 200, map[string]any{"docs": []Doc{{Path: "skills/email.md", Description: "How we write emails"}}})
 	case r.Method == "GET" && strings.HasPrefix(path, "/docs/"):
@@ -242,7 +254,7 @@ func TestTurnRunsCodeAndAnswers(t *testing.T) {
 	if last["role"] != "tool" || last["tool_call_id"] != "call_a" {
 		t.Fatalf("last message to the model %v", last)
 	}
-	if len(f.requests[0]["tools"].([]any)) != 2 {
+	if len(f.requests[0]["tools"].([]any)) != 4 {
 		t.Fatal("tools missing from the model request")
 	}
 }
@@ -425,5 +437,37 @@ func TestHistory(t *testing.T) {
 	}
 	if got[1].Content != nil {
 		t.Fatal("an assistant message with only tool calls has content")
+	}
+}
+
+func TestTurnWritesAGadget(t *testing.T) {
+	f, srv := newFakeKernel(t)
+	f.model = func(n int, req map[string]any) (int, string) {
+		switch n {
+		case 1:
+			return 200, toolCallAnswer("g1", "read_gadget_guide", `{}`)
+		case 2:
+			args, _ := json.Marshal(map[string]any{"name": "echo", "source": "export class App {}", "capabilities": []string{"web:x.test:read"}})
+			return 200, toolCallAnswer("g2", "write_gadget", string(args))
+		}
+		return 200, textAnswer("Echo is ready to try.")
+	}
+	send(t, newServer(srv.URL), f, "make me an echo gadget")
+	if got := roles(f.session.Messages); got != "user,assistant,tool,assistant,tool,assistant" {
+		t.Fatalf("transcript %s", got)
+	}
+	if !strings.Contains(f.session.Messages[2].Content, "export class App extends Gadget") {
+		t.Fatal("the guide was not returned")
+	}
+	if len(f.drafts) != 1 || f.drafts[0]["name"] != "echo" || f.drafts[0]["source"] != "export class App {}" {
+		t.Fatalf("drafts %v", f.drafts)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(f.session.Messages[4].Content), &result); err != nil || result["version"] != "1" || result["ok"] != true {
+		t.Fatalf("draft result %q", f.session.Messages[4].Content)
+	}
+	system := f.requests[0]["messages"].([]any)[0].(map[string]any)["content"].(string)
+	if !strings.Contains(system, "read_gadget_guide") {
+		t.Fatal("the system prompt does not mention gadgets")
 	}
 }

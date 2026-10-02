@@ -4,7 +4,8 @@ import { sha256Hex } from "./http";
 import type { Caller } from "./identity";
 import { isCellId } from "./hostname";
 import { covers, isCapability, isDigest, isGrant, isName, isVersion } from "./names";
-import type { Message, SessionInfo, SessionResult } from "./session";
+import type { Viewer } from "./catalog";
+import { type Message, type SessionInfo, type SessionResult, audit } from "./session";
 import { signTurn } from "./turn";
 import { type CellRecord, MAX_DOC_BYTES, type ShareRole } from "./workspace";
 
@@ -19,6 +20,7 @@ import { type CellRecord, MAX_DOC_BYTES, type ShareRole } from "./workspace";
 //   GET    /api/blueprints
 //   GET    /api/blueprints/:name
 //   PUT    /api/blueprints/:name/:version             {bundle, capabilities?, tier?}
+//   POST   /api/blueprints/:name/:version/publish     publishes a draft
 //   PUT    /api/workspaces/:ws                        {quota}
 //   GET    /api/workspaces/:ws
 //   GET    /api/workspaces/:ws/usage?month=YYYY-MM
@@ -46,6 +48,7 @@ import { type CellRecord, MAX_DOC_BYTES, type ShareRole } from "./workspace";
 //   POST   /api/workspaces/:ws/sessions/:id/messages   {role, content, ...}
 //   POST   /api/workspaces/:ws/sessions/:id/complete   {model, request}
 //   POST   /api/workspaces/:ws/sessions/:id/runs       {code, input?}
+//   POST   /api/workspaces/:ws/sessions/:id/drafts     {name, source, capabilities?, checks?}
 //   GET    /api/runs/:id                               {bound, keys}
 
 const MAX_BUNDLE_BYTES = 8 * 1024 * 1024;
@@ -100,19 +103,24 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
   }
 
   if (collection === "blueprints") {
+    // A user sees published versions and their own drafts.
+    const viewer = viewerOf(caller);
     if (a === undefined && method === "GET") {
-      const names = await catalog(env).names();
+      const names = await catalog(env).names(viewer);
       return json(200, { blueprints: names });
     }
     name(a);
     if (b === undefined && method === "GET") {
-      const versions = await catalog(env).versions(a);
+      const versions = await catalog(env).versions(a, viewer);
       if (!versions.length) throw new ApiError(404, `blueprint ${a} does not exist`);
       return json(200, { name: a, versions });
     }
-    if (c === undefined && method === "PUT") {
+    if (b !== undefined && c === undefined && method === "PUT") {
       admin();
       return publish(request, env, a, b);
+    }
+    if (b !== undefined && c === "publish" && d === undefined && method === "POST") {
+      return publishDraft(env, a, b, caller);
     }
   }
 
@@ -259,11 +267,14 @@ async function createCell(request: Request, env: Env, workspace: string, caller:
   const owner = ownerOf(caller, body);
   name(body.blueprint);
   if (body.version !== undefined && !isVersion(body.version)) throw new ApiError(400, "invalid version");
+  // A draft is for its author alone until they publish it. The admin token
+  // creating a cell for someone acts as that owner.
+  const viewer: Viewer = { admin: false, user: owner.user };
   const blueprint =
     body.version === undefined
-      ? await catalog(env).latest(body.blueprint)
+      ? await catalog(env).latest(body.blueprint, viewer)
       : await catalog(env).get(body.blueprint, body.version);
-  if (!blueprint) throw new ApiError(404, "blueprint version does not exist");
+  if (!blueprint || !usable(blueprint, viewer)) throw new ApiError(404, "blueprint version does not exist");
   return result(await env.WORKSPACE.getByName(workspace).createCell(blueprint, owner), 201);
 }
 
@@ -271,8 +282,42 @@ async function moveCell(request: Request, env: Env, workspace: string, cell: Cel
   const body = await readJson(request);
   if (!isVersion(body.version)) throw new ApiError(400, "version is required");
   const blueprint = await catalog(env).get(cell.blueprint, body.version);
-  if (!blueprint) throw new ApiError(404, "blueprint version does not exist");
+  if (!blueprint || !usable(blueprint, { admin: false, user: cell.owner.user })) {
+    throw new ApiError(404, "blueprint version does not exist");
+  }
   return result(await env.WORKSPACE.getByName(workspace).moveCell(cell.id, blueprint));
+}
+
+// Publishes a draft the agent wrote: its author's decision, never the
+// agent's (a turn token cannot reach this). Recorded in the Gatekeeper's
+// audit log first; a draft that cannot be audited stays a draft.
+async function publishDraft(env: Env, blueprint: string, version: string, caller: Caller): Promise<Response> {
+  if (caller.kind === "turn") throw new ApiError(403, "only the author can publish a draft");
+  if (!isVersion(version)) throw new ApiError(400, "invalid version");
+  const draft = await catalog(env).get(blueprint, version);
+  const viewer = viewerOf(caller);
+  if (!draft || !usable(draft, viewer)) throw new ApiError(404, "blueprint version does not exist");
+  if (draft.status !== "draft") throw new ApiError(409, `${blueprint} ${version} is already published`);
+  if (caller.kind === "user" && draft.author?.user !== caller.user) throw new ApiError(403, "only its author can publish a draft");
+  const publisher = caller.kind === "user" ? { user: caller.user, email: caller.email } : null;
+  try {
+    await audit(env, "published", draft, publisher ?? draft.author ?? { user: "admin", email: "" });
+  } catch (err) {
+    throw new ApiError(503, `not published, because it could not be audited: ${err instanceof Error ? err.message : err}`);
+  }
+  const published = await catalog(env).publishDraft(blueprint, version, publisher);
+  if (!published.ok) throw new ApiError(published.status, published.error);
+  return json(200, published.value);
+}
+
+function viewerOf(caller: Caller): Viewer {
+  return caller.kind === "admin" ? { admin: true } : { admin: false, user: caller.user };
+}
+
+// Whether a version may be used: a published one by anyone, a draft by its
+// author.
+function usable(b: { status?: string; author?: { user: string } }, viewer: Viewer): boolean {
+  return viewer.admin || b.status !== "draft" || b.author?.user === viewer.user;
 }
 
 // Grants are concrete capabilities, each covered by one the cell's Blueprint
@@ -397,6 +442,12 @@ async function sessions(
       },
     });
   }
+  if (sub === "drafts" && arg === undefined && method === "POST") {
+    const body = await readJson(request);
+    if (typeof body.source !== "string") throw new ApiError(400, "source must be the gadget's JavaScript");
+    const capabilities = body.capabilities ?? [];
+    return json(201, sessionResult(await session.draft(body.name, body.source, capabilities, checkRequests(body.checks))));
+  }
   if (sub === "runs" && arg === undefined && method === "POST") {
     const body = await readJson(request);
     if (typeof body.code !== "string" || !body.code.trim()) throw new ApiError(400, "code is required");
@@ -441,6 +492,20 @@ function agentMessage(body: Record<string, any>): Omit<Message, "seq" | "at"> {
     return message;
   }
   throw new ApiError(400, "role must be user, assistant or tool");
+}
+
+// Requests to make to a draft after GET /, to check it: at most five.
+function checkRequests(value: unknown): { method: string; path: string; body?: unknown }[] {
+  if (value === undefined) return [];
+  const methods = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
+  if (!Array.isArray(value) || value.length > 5) throw new ApiError(400, "checks must be a list of at most 5 requests");
+  return value.map((r) => {
+    const method = String(r?.method ?? "GET").toUpperCase();
+    if (!methods.has(method) || typeof r?.path !== "string" || !r.path.startsWith("/") || r.path.length > 512) {
+      throw new ApiError(400, "each check is {method, path, body?}, with a path starting with /");
+    }
+    return r.body === undefined ? { method, path: r.path } : { method, path: r.path, body: r.body };
+  });
 }
 
 function sessionResult<T>(r: SessionResult<T>): T {

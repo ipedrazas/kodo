@@ -16,6 +16,7 @@ Durable decisions that apply across all phases:
 - **Key models**: Fleet, Workspace, Blueprint (name, version, bundle digest, capabilities, tier), Cell (workspace, cell id, blueprint version, owner), Grant (user, cell, capability), Share (user, cell, role), Session (workspace, session id, owner, grants, transcript), Doc (workspace, path, markdown).
 - **Go services**: the operator, the Gatekeeper, the agent and a small metrics exporter. Go does not sit on the request path to a gadget.
 - **Agent**: a stateless Deployment serving the chat at `app.<domain>/chat/`. Sessions are `Session` Durable Objects of the kernel, registered in their workspace, so the agent keeps nothing. It creates a session or starts a turn with the user's ID token; the kernel answers a turn with a turn token, HMAC-signed with the fleet's kernel key, that reaches only that session (its transcript, its models, running code, the workspace's docs) until the turn ends or after 5 minutes. The agent's model is a session grant, `inference:model/agent:invoke`, which new sessions get. Workspace markdown docs are listed in the system prompt by path and description and read with a tool.
+- **Agent-authored Blueprints**: a gadget the agent writes is a draft Blueprint version, numbered 1, 2, ... per name, authored by the session's owner; a name belongs to whoever's agent first used it. A draft is usable only by its author; publishing is the author's act through their own login, never a turn token, and then the version is open to the whole fleet. The kernel records authored and published events in the Gatekeeper's audit log (`POST /v1/events`, signed like a call), and keeps no draft or publication it could not record.
 - **Ephemeral cells**: the agent's code runs in a new cell per run, never served, with exactly its session's grants, deleted when the run ends (or by its alarm if the node dies). Every run loads the same runner bundle, because a loaded bundle's memory is never freed; SES locks that shared isolate down and each run evaluates in its own Compartment. The code gets no ArrayBuffers or typed arrays, whose memory celld's heap limit does not cover. Limits: 60 s, 2 s of CPU and 20 capability calls per run.
 - **CRDs**: `Fleet`, `Blueprint`, `Workspace` under `kodo.dev/v1alpha1`. Cells never go in etcd.
 - **Gatekeeper state**: the Gatekeeper is stateless. Encrypted tokens and approvals are bucket objects under prefixes only the Gatekeeper's credentials can read, never a fleet's. Every approval state change (pending → executing on approval → done or failed; pending → rejected or expired) is a write conditional on the object's ETag, so two replicas cannot claim the same approval. An approval left executing past a stale limit (a replica died mid-call) is reported as failed, never retried.
@@ -294,7 +295,20 @@ The agent service and the chat surface at `app.<domain>`, with session state in 
 
 ---
 
-## Phase 11: Agent gadget authoring
+## Phase 11: Agent gadget authoring (done)
+
+In [#18](https://github.com/ipedrazas/kodo/pull/18), verified on the k3s cluster by `test/e2e/authoring.sh` (`task k3s:authoring-test`) against the real gateway, agent, fleet, Gatekeeper, DeepSeek V4 Flash and Hacker News; also tested under `celld dev` (`kernel/test/authoring.test.mjs`) and in Go (`internal/agent`, `internal/gatekeeper/events_test.go`). See [kernel/AGENT.md](../kernel/AGENT.md#gadgets-the-agent-writes). Decisions:
+
+- The agent reads an embedded guide (`internal/agent/gadgets.md`) and submits a module with `write_gadget`. The kernel stores it by digest as a draft Blueprint version, numbered 1, 2, ... per name, authored by the session's owner in that session. A name belongs to whoever's agent first used it; names published with the admin token belong to no one's agent.
+- Each draft is loaded once in an ephemeral cell with no grants: `GET /`, then up to five requests the agent gives (`checks`) against the same database. The agent sees each status and body and fixes the draft before the user does. A session may write 20 drafts, since each is a bundle celld keeps in memory.
+- A draft is usable only by its author, who can try it. Publishing is the author's act through their own login (`POST /api/blueprints/:name/:version/publish`); a turn token cannot reach it. Once published, the version is open to the whole fleet. A revision is a new draft; cells keep their version until their owner moves them.
+- "Who authored and who published" is in the Gatekeeper's audit log: the kernel sends signed `authored` and `published` events to `POST /v1/events`, with the bundle's digest, the declared capabilities and the session. A draft or publication that cannot be recorded does not happen.
+- The chat shows each draft as a card: the code, the capabilities it asks for, whether it works, and Publish and Try it. Try it opens a cell and links to its grants on the home page.
+
+Findings:
+
+- On the first k3s run the agent wrote a gadget whose page served but whose API used the constructor's `ctx` instead of `this.ctx`, copying the guide's example; checking only `GET /` passed it. The guide now writes `this.ctx` everywhere, and checks exercise the API. On a later run the agent's first draft failed its own checks and its second passed.
+- The chat page and the home page remembered the workspace under different keys, so the chat opened with none; they share one now, defaulting to `team`. A settings page would be the place for this and for the grants that now live on the home page.
 
 **User stories**: agent writes gadgets; publishing is a user action.
 
@@ -304,11 +318,11 @@ The agent produces a gadget bundle; the kernel stores it by digest and creates a
 
 ### Acceptance criteria
 
-- [ ] The agent produces a working gadget from a chat request
-- [ ] The draft is not instantiable by others until the user publishes
-- [ ] The user sees and grants capabilities before first use
-- [ ] A revised gadget becomes a new Blueprint version; existing instances are unaffected
-- [ ] Audit records who authored and who published
+- [x] The agent produces a working gadget from a chat request
+- [x] The draft is not instantiable by others until the user publishes
+- [x] The user sees and grants capabilities before first use
+- [x] A revised gadget becomes a new Blueprint version; existing instances are unaffected
+- [x] Audit records who authored and who published
 
 ---
 
