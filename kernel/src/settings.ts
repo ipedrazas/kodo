@@ -73,7 +73,7 @@ export const SETTINGS_PAGE = `<!doctype html>
   </aside>
   <main>
     <p id="error" role="alert"></p>
-    <section id="workspace" hidden>
+    <section id="section-workspace" hidden>
       <h2>Workspace</h2>
       <p class="lead">The workspace the cells, chat and these settings open in. This browser remembers it.</p>
       <div class="card">
@@ -86,27 +86,27 @@ export const SETTINGS_PAGE = `<!doctype html>
         <div class="row" id="ws-info"></div>
       </div>
     </section>
-    <section id="cells" hidden>
+    <section id="section-cells" hidden>
       <h2>Cells</h2>
       <p class="lead">Your gadget instances in this workspace, and those shared with you. Only a cell's owner grants it capabilities, shares it, moves it to another version or deletes it.</p>
       <div id="cell-list"></div>
     </section>
-    <section id="gadgets" hidden>
+    <section id="section-gadgets" hidden>
       <h2>Gadgets</h2>
       <p class="lead">Blueprint versions your agent wrote. A draft is yours alone until you publish it; then anyone can open it. Publishing is recorded in the audit log.</p>
       <div id="gadget-list"></div>
     </section>
-    <section id="chats" hidden>
+    <section id="section-chats" hidden>
       <h2>Chats</h2>
       <p class="lead">Your chats with the agent in this workspace. Every run of a chat's code gets exactly the capabilities granted here.</p>
       <div id="chat-list"></div>
     </section>
-    <section id="connections" hidden>
+    <section id="section-connections" hidden>
       <h2>Connections and approvals</h2>
       <p class="lead">Accounts your cells and chats act with through the Gatekeeper, which holds the tokens. Connect and approve on the Gatekeeper's page.</p>
       <div id="connection-list"></div>
     </section>
-    <section id="usage" hidden>
+    <section id="section-usage" hidden>
       <h2>Usage</h2>
       <p class="lead">What your cells and chats did this month in this workspace.</p>
       <div id="usage-view"></div>
@@ -231,11 +231,11 @@ async function versionsOf(blueprint) {
 
 async function showCells() {
   const { cells } = await wsApi("GET", "/cells");
+  // Each Blueprint's versions once, all at once.
+  await Promise.all([...new Set(cells.map((c) => c.blueprint))].map((b) => versionsOf(b).catch(() => [])));
   const list = $("cell-list");
   if (!cells.length) { list.replaceChildren(el("p", { class: "muted" }, "No cells in " + ws + " yet. Create one on the ", el("a", { href: "/" }, "Cells"), " page.")); return; }
-  const cards = [];
-  for (const cell of cells) cards.push(await cellCard(cell));
-  list.replaceChildren(...cards);
+  list.replaceChildren(...(await Promise.all(cells.map(cellCard))));
   if (focusCell) {
     const card = $("cell-" + focusCell);
     if (card) { card.classList.add("focus"); card.scrollIntoView({ block: "center" }); card.querySelector("input.mono")?.focus(); }
@@ -337,9 +337,10 @@ async function showChats() {
   const { sessions } = await wsApi("GET", "/sessions");
   const list = $("chat-list");
   if (!sessions.length) { list.replaceChildren(el("p", { class: "muted" }, "No chats in " + ws + " yet. ", el("a", { href: "/chat/" }, "Start one"), ".")); return; }
+  const views = await Promise.all(sessions.map((s) => wsApi("GET", "/sessions/" + s.id + "?after=999999999")));
   const cards = [];
-  for (const s of sessions) {
-    const view = await wsApi("GET", "/sessions/" + s.id + "?after=999999999");
+  for (const [i, s] of sessions.entries()) {
+    const view = views[i];
     const save = (grants) => act(() => wsApi("PUT", "/sessions/" + s.id + "/grants", { grants }));
     cards.push(el("div", { class: "card" },
       el("h3", {}, el("a", { href: "/chat/?workspace=" + encodeURIComponent(ws) + "&session=" + s.id }, s.title), el("span", { class: "muted hint" }, date(s.createdAt))),
@@ -403,6 +404,7 @@ async function showUsage() {
 
 // Navigation
 
+let shown = null;
 const SECTIONS = { workspace: showWorkspace, cells: showCells, gadgets: showGadgets, chats: showChats, connections: showConnections, usage: showUsage };
 function remember() {
   const q = new URLSearchParams({ workspace: ws });
@@ -410,15 +412,23 @@ function remember() {
 }
 async function show() {
   const name = SECTIONS[location.hash.slice(1)] ? location.hash.slice(1) : (focusCell ? "cells" : "workspace");
-  for (const id of Object.keys(SECTIONS)) $(id).hidden = id !== name;
+  for (const id of Object.keys(SECTIONS)) $("section-" + id).hidden = id !== name;
   for (const a of $("nav").querySelectorAll("a")) {
     if (a.getAttribute("href") === "#" + name) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   }
-  document.title = $(name).querySelector("h2").textContent + " · " + ws + " · kodo";
+  const section = $("section-" + name);
+  document.title = section.querySelector("h2").textContent + " · " + ws + " · kodo";
+  // Sections that load show it until they do; a redraw after an action
+  // keeps what is there.
+  const target = section.querySelector("div[id]");
+  if (name !== shown && target && name !== "workspace") target.replaceChildren(el("p", { class: "muted" }, "Loading…"));
+  shown = name;
   try { await SECTIONS[name](); } catch (err) { showError(err); }
 }
 window.addEventListener("hashchange", () => { showError(null); show(); });
+// Opening a section never scrolls the page to it.
+if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 
 (async () => {
   try {
