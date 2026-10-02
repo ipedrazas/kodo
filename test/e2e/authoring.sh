@@ -52,7 +52,7 @@ say() {
 # The last draft of the gadget in the latest turn: "version ok".
 last_draft() {
   session > "$results/authoring-session.json"
-  python3 - "$results/authoring-session.json" "$gadget" <<'PY'
+  python3 -c '
 import json, sys
 ms, name = json.load(open(sys.argv[1]))["messages"], sys.argv[2]
 start = max(i for i, m in enumerate(ms) if m["role"] == "user")
@@ -60,7 +60,7 @@ drafts = [json.loads(m["content"]) for m in ms[start:] if m["role"] == "tool" an
 drafts = [d for d in drafts if d.get("name") == name and d.get("version")]
 if drafts:
     print(drafts[-1]["version"], drafts[-1]["ok"])
-PY
+' "$results/authoring-session.json" "$gadget"
 }
 cell_url() { echo "https://$1.g.$DOMAIN"; }
 in_cell() { # in_cell USER CELL METHOD PATH [JSON]: the gadget's own API, body then status
@@ -142,38 +142,6 @@ PY
 [[ $(api alice GET "/workspaces/team/cells/$mine" | head -1 | json 'd["version"]') == "$v1" ]] || fail "alice's cell moved off $v1"
 [[ $(api bob GET "/workspaces/team/cells/$bobs" | head -1 | json 'd["version"]') == "$v1" ]] || fail "bob's cell moved off $v1"
 [[ $(status alice "$(cell_url "$mine")/api/top") != 200 ]] || fail "alice's cell on $v1 serves the revision's /api/top"
-[[ $(in_cell alice "$mine" GET /api/messages | head -1) == *"hello from the e2e test $run"* ]] || fail "the message was not stored"
-echo "$gadget $v1: a draft that serves its page, echoes and stores; alice tried it in $mine"
-
-step "The draft is not instantiable by others until the user publishes"
-[[ $(api bob GET "/blueprints/$gadget" | tail -1) == 404 ]] || fail "bob can see the draft"
-payload="{\"blueprint\":\"$gadget\",\"version\":\"$v1\"}"
-[[ $(api bob POST /workspaces/team/cells "$payload" | tail -1) == 404 ]] || fail "bob could open the draft"
-[[ $(api bob POST "/blueprints/$gadget/$v1/publish" | tail -1) == 404 ]] || fail "bob could publish the draft"
-out=$(api alice POST "/blueprints/$gadget/$v1/publish")
-[[ $(code "$out") == 200 && $(body "$out" | json 'd["status"]') == published ]] || fail "publishing: $out"
-bobs=$(new_cell bob "$v1")
-cells+=("$bobs")
-echoes bob "$bobs" "bob was here"
-echo "bob could neither see, open nor publish it; once alice published it, bob's cell $bobs echoes"
-
-step "A revised gadget becomes a new Blueprint version; existing instances are unaffected"
-say "Revise $gadget: keep everything it does, and add GET /api/top, which answers JSON {\"title\": ...} with the title of the most popular Hacker News story about kodo, fetched with the capability $WEB from the path /search?query=kodo&tags=story&hitsPerPage=1. If that capability is not granted, /api/top answers 403 with JSON {\"error\": ...}."
-read -r v2 ok2 <<<"$(last_draft)"
-[[ -n ${v2:-} && $ok2 == True && $v2 != "$v1" ]] || fail "the revision is not a new working version (see $results/authoring-session.json)"
-versions=$(api alice GET "/blueprints/$gadget" | head -1)
-VERSIONS=$versions python3 - "$v1" "$v2" "$WEB" <<'PY' || fail "versions: $versions"
-import json, os, sys
-v1, v2, web = sys.argv[1:]
-vs = {v["version"]: v for v in json.loads(os.environ["VERSIONS"])["versions"]}
-assert vs[v1]["status"] == "published" and vs[v2]["status"] == "draft", vs
-assert web in vs[v2]["capabilities"], vs[v2]
-PY
-for cl in "$mine" "$bobs"; do
-  [[ $(api alice GET "/workspaces/team/cells/$cl" | head -1 | json 'd["version"]' 2>/dev/null || api bob GET "/workspaces/team/cells/$cl" | head -1 | json 'd["version"]') == "$v1" ]] ||
-    fail "cell $cl moved off $v1"
-  [[ $(status alice "$(cell_url "$cl")/api/top") != 200 ]] || [[ $cl == "$bobs" ]] || fail "cell $cl serves /api/top"
-done
 [[ $(in_cell alice "$mine" GET /api/messages | head -1) == *"hello from the e2e test $run"* ]] || fail "alice's cell lost its messages"
 [[ $(api bob GET "/blueprints/$gadget" | head -1 | json '[v["version"] for v in d["versions"]]') == "['$v1']" ]] || fail "bob can see the revision"
 echo "$v2 is a draft declaring $WEB; cells on $v1 are unchanged and keep their data; bob sees only $v1"

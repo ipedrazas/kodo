@@ -254,7 +254,7 @@ func draftResult(d Draft) string {
 		"check":        d.Check,
 	}
 	if d.Check.OK {
-		out["note"] = "Stored as a draft. The user can try it, publish it and grant its capabilities from the chat."
+		out["note"] = "Stored as a draft. The chat shows the user a card to try it and publish it; they grant capabilities to the cell they open."
 	} else {
 		out["note"] = "Stored, but it does not work: fix it and submit it again under the same name."
 	}

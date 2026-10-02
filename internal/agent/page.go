@@ -235,7 +235,7 @@ async function gadgetCard(t, r) {
   } catch {}
   const check = r.check || {};
   box.append(el("div", {},
-    status === "published" ? el("span", { class: "ok" }, "Published") : el("span", {}, "Draft: only you can open it until you publish it."),
+    status === "published" ? el("span", { class: "ok" }, "Published.") : el("span", {}, "Draft: only you can open it until you publish it."),
     " ", check.ok ? el("span", { class: "ok" }, "It loads and serves its page.") : el("span", { class: "bad" }, "It does not work yet: " + (check.error || "its page answered " + check.status) + ".")));
   const caps = r.capabilities || [];
   box.append(el("div", { class: "hint" }, caps.length ? "Asks for: " : "Asks for no capabilities.",

@@ -295,7 +295,20 @@ The agent service and the chat surface at `app.<domain>`, with session state in 
 
 ---
 
-## Phase 11: Agent gadget authoring
+## Phase 11: Agent gadget authoring (done)
+
+In [#18](https://github.com/ipedrazas/kodo/pull/18), verified on the k3s cluster by `test/e2e/authoring.sh` (`task k3s:authoring-test`) against the real gateway, agent, fleet, Gatekeeper, DeepSeek V4 Flash and Hacker News; also tested under `celld dev` (`kernel/test/authoring.test.mjs`) and in Go (`internal/agent`, `internal/gatekeeper/events_test.go`). See [kernel/AGENT.md](../kernel/AGENT.md#gadgets-the-agent-writes). Decisions:
+
+- The agent reads an embedded guide (`internal/agent/gadgets.md`) and submits a module with `write_gadget`. The kernel stores it by digest as a draft Blueprint version, numbered 1, 2, ... per name, authored by the session's owner in that session. A name belongs to whoever's agent first used it; names published with the admin token belong to no one's agent.
+- Each draft is loaded once in an ephemeral cell with no grants: `GET /`, then up to five requests the agent gives (`checks`) against the same database. The agent sees each status and body and fixes the draft before the user does. A session may write 20 drafts, since each is a bundle celld keeps in memory.
+- A draft is usable only by its author, who can try it. Publishing is the author's act through their own login (`POST /api/blueprints/:name/:version/publish`); a turn token cannot reach it. Once published, the version is open to the whole fleet. A revision is a new draft; cells keep their version until their owner moves them.
+- "Who authored and who published" is in the Gatekeeper's audit log: the kernel sends signed `authored` and `published` events to `POST /v1/events`, with the bundle's digest, the declared capabilities and the session. A draft or publication that cannot be recorded does not happen.
+- The chat shows each draft as a card: the code, the capabilities it asks for, whether it works, and Publish and Try it. Try it opens a cell and links to its grants on the home page.
+
+Findings:
+
+- On the first k3s run the agent wrote a gadget whose page served but whose API used the constructor's `ctx` instead of `this.ctx`, copying the guide's example; checking only `GET /` passed it. The guide now writes `this.ctx` everywhere, and checks exercise the API. On a later run the agent's first draft failed its own checks and its second passed.
+- The chat page and the home page remembered the workspace under different keys, so the chat opened with none; they share one now, defaulting to `team`. A settings page would be the place for this and for the grants that now live on the home page.
 
 **User stories**: agent writes gadgets; publishing is a user action.
 
@@ -305,11 +318,11 @@ The agent produces a gadget bundle; the kernel stores it by digest and creates a
 
 ### Acceptance criteria
 
-- [ ] The agent produces a working gadget from a chat request
-- [ ] The draft is not instantiable by others until the user publishes
-- [ ] The user sees and grants capabilities before first use
-- [ ] A revised gadget becomes a new Blueprint version; existing instances are unaffected
-- [ ] Audit records who authored and who published
+- [x] The agent produces a working gadget from a chat request
+- [x] The draft is not instantiable by others until the user publishes
+- [x] The user sees and grants capabilities before first use
+- [x] A revised gadget becomes a new Blueprint version; existing instances are unaffected
+- [x] Audit records who authored and who published
 
 ---
 
