@@ -43,8 +43,10 @@ spec:
       backendRefs:
         - name: openrouter
           modelNameOverride: deepseek/deepseek-v4-flash
+      # The agent writes a whole gadget in one answer: up to AGENT_MAX_TOKENS
+      # (16384) at the 230-400 tokens/s DeepSeek gives.
       timeouts:
-        request: 20s
+        request: 120s
     - name: sim
       matches:
         - headers:

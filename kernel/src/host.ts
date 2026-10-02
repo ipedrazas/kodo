@@ -51,9 +51,11 @@ export const FLEET_HEADER = "x-kodo-fleet";
 export const TIMESTAMP_HEADER = "x-kodo-timestamp";
 export const SIGNATURE_HEADER = "x-kodo-signature";
 
-// Above the Gatekeeper's own limits (20 s for a model call), so it answers
-// first, and below a gadget call's 30 s.
+// Below a gadget call's 30 s. The Gatekeeper's own limit for a model call is
+// longer, for the agent, whose session waits AGENT_MODEL_TIMEOUT_MS.
 const GATEKEEPER_TIMEOUT_MS = 25_000;
+// Above the Gatekeeper's limit for a model call (120 s), so it answers first.
+export const AGENT_MODEL_TIMEOUT_MS = 130_000;
 const MAX_REQUEST_BODY = 1024 * 1024;
 
 // Holds the kernel's signing key: created on first use, stored in this
@@ -228,7 +230,7 @@ export class GatekeeperError extends Error {
 }
 
 // Sends a signed request to the Gatekeeper and returns its 200 answer.
-export async function gatekeeper(env: Env, path: string, body: unknown): Promise<Response> {
+export async function gatekeeper(env: Env, path: string, body: unknown, timeoutMs = GATEKEEPER_TIMEOUT_MS): Promise<Response> {
   const config = gatekeeperConfig(env);
   if (!config.url || !config.key || !config.fleet) throw new GatekeeperError(503, "this fleet has no Gatekeeper configured");
   const payload = JSON.stringify(body);
@@ -244,7 +246,7 @@ export async function gatekeeper(env: Env, path: string, body: unknown): Promise
         [SIGNATURE_HEADER]: "v1=" + (await sign(config.key, `${timestamp}.${payload}`)),
       },
       body: payload,
-      signal: AbortSignal.timeout(GATEKEEPER_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     throw new GatekeeperError(502, `gatekeeper unreachable: ${err instanceof Error ? err.message : String(err)}`);

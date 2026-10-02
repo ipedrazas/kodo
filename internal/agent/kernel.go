@@ -326,9 +326,9 @@ func (k *Kernel) Doc(ctx context.Context, auth Auth, ws, path string) (string, e
 	return string(raw), err
 }
 
-// timeout is how long one kernel call may take: a run's 60 s and the
-// Gatekeeper's, with room to spare.
-const timeout = 90 * time.Second
+// timeout is how long one kernel call may take: a model call's 130 s in the
+// kernel, or a run's 60 s, with room to spare.
+const timeout = 150 * time.Second
 
 // NewKernel is a kernel client with a timeout on every call.
 func NewKernel(baseURL string) *Kernel {
