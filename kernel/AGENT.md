@@ -12,6 +12,14 @@ A chat is a **session** with the agent, a `Session` Durable Object registered in
 
 New sessions are granted `inference:model/agent:invoke`, the model the agent thinks with. Its calls go through the Gatekeeper as the session, so they count against the owner's and workspace's budgets and are in the audit log. The owner adds or removes grants in the chat's settings like any cell's, but a session has no Blueprint declaring what it may hold: any concrete capability will do. The Gatekeeper still decides every call, with the owner's own connections.
 
+## Gadgets the agent writes
+
+Asked for a gadget, the agent reads its guide ([`internal/agent/gadgets.md`](../internal/agent/gadgets.md)) and submits a module with `write_gadget`. The kernel stores it by digest as a **draft**: the next version (1, 2, ...) of that Blueprint name, authored by the session's owner in that session. It records in the Gatekeeper's audit log that they authored it (a draft that cannot be audited is not kept), then loads it once in an ephemeral cell with no grants and asks for `GET /`, so the agent learns at once whether it works and can fix it. A name the agent first used belongs to that user: nobody else's agent can add versions to it, nor to a name published with the admin token.
+
+A draft is the author's alone: nobody else sees it in the catalog or can create a cell from it. The author can try it from the chat, where it appears as a card with the code and the capabilities it asks for, and publish it there. Publishing is the user's act with their own login; a turn token cannot do it, so the agent never can. It is audited too, and from then on anyone can open the version. A revision is a new draft version; cells keep the version they run until their owner moves them. A new cell starts with no grants: its owner grants the capabilities the version declares, on the home page.
+
+Each draft is a new bundle, and celld 0.6.0 keeps every bundle it loads in memory, so a session may write at most 20.
+
 ## What the code is
 
 The body of an async function. It returns a JSON value, and may log:

@@ -9,7 +9,9 @@
 // answers with `gatekeeper(call)` if that is a function ({status, headers,
 // body, usage?}), or else 200 with the call it received as the body. Approval
 // queries are answered from `gatekeeper.approvals`, a Map of id to status
-// ({state, ...}) that tests fill in; queries are kept in `queries`.
+// ({state, ...}) that tests fill in; queries are kept in `queries`. Audit
+// events (a Blueprint version authored or published) are kept in `events`;
+// set `gatekeeper.refuseEvents` to answer them 503.
 import { spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync, randomBytes, sign, timingSafeEqual } from "node:crypto";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -143,6 +145,7 @@ async function startGatekeeper(answer = echo) {
   const calls = [];
   const queries = [];
   const approvals = new Map();
+  const events = [];
   let rejected = 0;
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -176,6 +179,17 @@ async function startGatekeeper(answer = echo) {
         res.end(JSON.stringify({ approvals: answer }));
         return;
       }
+      if (req.url === "/v1/events") {
+        if (gk.refuseEvents) {
+          res.statusCode = 503;
+          res.end("the audit log is unavailable\n");
+          return;
+        }
+        events.push(JSON.parse(body));
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
       if (req.url !== "/v1/calls") {
         res.statusCode = 404;
         res.end("{}");
@@ -193,16 +207,19 @@ async function startGatekeeper(answer = echo) {
     });
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  return {
+  const gk = {
     url: `http://127.0.0.1:${server.address().port}`,
     key,
     fleet,
     calls,
+    events,
+    refuseEvents: false,
     queries,
     approvals,
     rejected: () => rejected,
     close: () => server.close(),
   };
+  return gk;
 }
 
 // A minimal OIDC signer: an RSA key served as a JWKS, and ID tokens for it.

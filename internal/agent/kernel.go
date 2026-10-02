@@ -122,6 +122,24 @@ type RunResult struct {
 	MS    int64 `json:"ms"`
 }
 
+// Draft is a gadget the agent wrote, stored as a draft Blueprint version,
+// and what its page answered when the kernel loaded it.
+type Draft struct {
+	Blueprint struct {
+		Name         string   `json:"name"`
+		Version      string   `json:"version"`
+		Status       string   `json:"status"`
+		Capabilities []string `json:"capabilities"`
+	} `json:"blueprint"`
+	Check struct {
+		OK          bool   `json:"ok"`
+		Status      int    `json:"status,omitempty"`
+		ContentType string `json:"contentType,omitempty"`
+		Body        string `json:"body,omitempty"`
+		Error       string `json:"error,omitempty"`
+	} `json:"check"`
+}
+
 // Error is a refusal from the kernel.
 type Error struct {
 	Status  int
@@ -267,6 +285,14 @@ func (k *Kernel) Run(ctx context.Context, auth Auth, ws, id, code string) (RunRe
 	var r RunResult
 	err := k.do(ctx, auth, http.MethodPost, sessionPath(ws, id)+"/runs", map[string]string{"code": code}, &r)
 	return r, err
+}
+
+// Draft stores a gadget the agent wrote as a draft for the session's owner.
+func (k *Kernel) Draft(ctx context.Context, auth Auth, ws, id, name, source string, capabilities []string) (Draft, error) {
+	var d Draft
+	body := map[string]any{"name": name, "source": source, "capabilities": capabilities}
+	err := k.do(ctx, auth, http.MethodPost, sessionPath(ws, id)+"/drafts", body, &d)
+	return d, err
 }
 
 // Docs lists the workspace's documents.

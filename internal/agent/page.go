@@ -38,6 +38,10 @@ const chatPage = `<!doctype html>
   details.tool { border: 1px solid var(--line); border-radius: .5rem; padding: .3rem .6rem; max-width: 48rem; }
   details.tool summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
   .ok { color: #15803d; } .bad { color: #b91c1c; }
+  .gadget { border: 1px solid var(--accent); border-radius: .6rem; padding: .6rem .8rem; max-width: 48rem; }
+  .gadget h3 { margin: 0 0 .3rem; font-size: 1rem; }
+  .gadget .actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-top: .5rem; }
+  .gadget details summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
   .event { background: var(--note); border-radius: .5rem; padding: .4rem .7rem; font-size: .92rem; max-width: 48rem; }
   #banner { margin: 0 1rem; }
   #composer { display: flex; gap: .5rem; padding: .75rem 1rem; border-top: 1px solid var(--line); }
@@ -105,7 +109,8 @@ const chatPage = `<!doctype html>
 <script>
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
-let ws = params.get("workspace") || localStorage.getItem("kodo-workspace") || "";
+// The same workspace as the home page remembers.
+let ws = params.get("workspace") || localStorage.getItem("kodo.workspace") || "team";
 let current = params.get("session");
 let session = null;
 let seen = 0;
@@ -193,18 +198,79 @@ function parse(json) { try { return JSON.parse(json); } catch { return null; } }
 
 // A tool call and, once it arrives, its result, in one box.
 const tools = new Map();
+const LABELS = { run_code: "Ran code", read_gadget_guide: "Read the gadget guide", write_gadget: "Wrote a gadget" };
 function toolBox(call) {
   const args = parse(call.function.arguments) || {};
-  const summary = el("summary", {}, call.function.name === "run_code" ? "Ran code" : call.function.name === "read_doc" ? "Read " + (args.path || "a document") : call.function.name);
+  const name = call.function.name;
+  if (name === "write_gadget") {
+    // A gadget the agent wrote: a card the user acts on.
+    const box = el("div", { class: "gadget" }, el("h3", {}, "Gadget " + (args.name || "")));
+    const code = el("details", {}, el("summary", {}, "Code"), el("pre", {}, args.source || ""));
+    tools.set(call.id, { box, args, code });
+    box.append(el("div", { class: "muted hint" }, "Saving…"));
+    return box;
+  }
+  const summary = el("summary", {}, LABELS[name] || (name === "read_doc" ? "Read " + (args.path || "a document") : name));
   const box = el("details", { class: "tool" }, summary);
   if (args.code) box.append(el("pre", {}, args.code));
   tools.set(call.id, { box, summary });
   return box;
 }
+
+const cellHost = (id) => id + "." + location.hostname.replace(/^app\./, "g.");
+
+// Fills a gadget card with what the draft is now: it may have been
+// published since it was written.
+async function gadgetCard(t, r) {
+  const box = t.box;
+  box.replaceChildren(el("h3", {}, "Gadget " + r.name + " ", el("span", { class: "muted" }, "version " + r.version)));
+  if (!r.version) {
+    box.append(el("div", { class: "bad" }, r.error || "Not stored."), t.code);
+    return;
+  }
+  let status = r.status;
+  try {
+    const { versions } = await call("GET", "/api/blueprints/" + encodeURIComponent(r.name));
+    status = versions.find((v) => v.version === r.version)?.status || status;
+  } catch {}
+  const check = r.check || {};
+  box.append(el("div", {},
+    status === "published" ? el("span", { class: "ok" }, "Published") : el("span", {}, "Draft: only you can open it until you publish it."),
+    " ", check.ok ? el("span", { class: "ok" }, "It loads and serves its page.") : el("span", { class: "bad" }, "It does not work yet: " + (check.error || "its page answered " + check.status) + ".")));
+  const caps = r.capabilities || [];
+  box.append(el("div", { class: "hint" }, caps.length ? "Asks for: " : "Asks for no capabilities.",
+    ...caps.map((c) => el("span", { class: "grant" }, c))));
+  box.append(t.code);
+  const actions = el("div", { class: "actions" });
+  const note = el("span", { class: "muted hint" });
+  if (status !== "published") {
+    actions.append(el("button", { type: "button", onclick: async (e) => {
+      if (!confirm("Publish " + r.name + " version " + r.version + "? Anyone will then be able to open it." + (caps.length ? " It asks for " + caps.join(", ") + "." : ""))) return;
+      e.target.disabled = true;
+      try { await call("POST", "/api/blueprints/" + encodeURIComponent(r.name) + "/" + encodeURIComponent(r.version) + "/publish"); await gadgetCard(t, r); }
+      catch (err) { note.textContent = String(err.message || err); e.target.disabled = false; }
+    } }, "Publish"));
+  }
+  actions.append(el("button", { type: "button", onclick: async (e) => {
+    e.target.disabled = true;
+    try {
+      const cell = await api("POST", "/cells", { blueprint: r.name, version: r.version });
+      note.replaceChildren("Cell " + cell.id + ": ", el("a", { href: "https://" + cellHost(cell.id) + "/", target: "_blank", rel: "noopener" }, "open it"),
+        ...(caps.length ? [" · ", el("a", { href: "/?workspace=" + encodeURIComponent(ws) + "&cell=" + cell.id }, "grant its capabilities")] : []));
+    } catch (err) { note.textContent = String(err.message || err); }
+    e.target.disabled = false;
+  } }, "Try it"));
+  actions.append(note);
+  box.append(actions);
+}
 function toolResult(m) {
   const t = tools.get(m.tool_call_id);
   if (!t) return;
   const r = parse(m.content);
+  if (m.name === "write_gadget") {
+    gadgetCard(t, r && r.name ? r : { name: t.args.name, error: (r && r.error) || m.content });
+    return;
+  }
   if (m.name === "run_code" && r) {
     t.summary.append(" — ", el("span", { class: r.ok ? "ok" : "bad" }, r.ok ? "ok" : "failed"));
     if (r.approvals && r.approvals.length) t.summary.append(" — waiting for approval");
@@ -278,7 +344,7 @@ async function setGrants(grants) {
 $("workspace-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   ws = $("workspace").value;
-  localStorage.setItem("kodo-workspace", ws);
+  localStorage.setItem("kodo.workspace", ws);
   current = null;
   remember();
   try { await loadSessions(); showError(null); } catch (err) { showError(err); }

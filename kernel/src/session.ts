@@ -1,9 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
-import type { MonthUsage, RunResult } from "./cell";
+import type { BlueprintVersion } from "./catalog";
+import type { CheckResult, MonthUsage, RunResult } from "./cell";
 import { AGENT_BLUEPRINT } from "./cell";
 import type { Env } from "./env";
 import { type ApprovalStatus, GatekeeperError, SETTLED, type TokenUsage, fromApprovals, gatekeeper } from "./host";
-import { newId } from "./names";
+import { sha256Hex } from "./http";
+import { isCapability, isName, newId } from "./names";
 import { RUNNER_SOURCE, runnerDigest } from "./runner";
 import type { Owner } from "./workspace";
 
@@ -95,6 +97,19 @@ const APPROVAL_POLL_FIRST_MS = 2_000;
 const APPROVAL_POLL_MAX_MS = 60_000;
 const MAX_WATCHED_APPROVALS = 100;
 const APPROVAL_BODY_BYTES = 2048;
+// Gadgets the agent writes. Each draft is a new bundle, and celld 0.6.0
+// keeps every bundle it loads in memory, so a session may write only so
+// many.
+const MAX_DRAFTS = 20;
+const MAX_GADGET_BYTES = 96 * 1024;
+const MAX_DECLARED = 20;
+
+// A draft the agent wrote: its Blueprint version, and what its page
+// answered when the kernel loaded it.
+export interface DraftResult {
+  blueprint: BlueprintVersion;
+  check: CheckResult;
+}
 
 interface Watched {
   id: string;
@@ -264,6 +279,55 @@ export class Session extends DurableObject<Env> {
       callLimit: Number(this.env.AGENT_RUN_CALLS) || 20,
     });
     return { ok: true, value: result };
+  }
+
+  // Stores a gadget the agent wrote as a draft Blueprint version for the
+  // session's owner, records in the Gatekeeper's audit log that they
+  // authored it, and loads it once to see that it serves. Only the owner
+  // can use the draft until they publish it, and publishing is theirs alone.
+  async draft(name: string, source: string, capabilities: string[]): Promise<SessionResult<DraftResult>> {
+    const info = this.info();
+    if (!info) return fail(404, "session does not exist");
+    if (!isName(name)) return fail(400, "a gadget's name is lowercase letters, digits and hyphens");
+    const bytes = new TextEncoder().encode(source);
+    if (!bytes.byteLength) return fail(400, "the gadget's source is empty");
+    if (bytes.byteLength > MAX_GADGET_BYTES) return fail(413, "a gadget the agent writes is at most 96 KiB");
+    if (!Array.isArray(capabilities) || capabilities.length > MAX_DECLARED || !capabilities.every(isCapability)) {
+      return fail(400, "capabilities must be a list of <provider>:<resource>:<verb>");
+    }
+    const drafts = this.ctx.storage.kv.get<number>("drafts") ?? 0;
+    if (drafts >= MAX_DRAFTS) return fail(429, `this session has written ${MAX_DRAFTS} drafts; start a new one`);
+
+    const bundle = await sha256Hex(bytes);
+    await this.env.BUNDLES.put(`sha256/${bundle}.js`, bytes, { httpMetadata: { contentType: "text/javascript" } });
+    const catalog = this.env.CATALOG.getByName("catalog");
+    const drafted = await catalog.draft({
+      name,
+      bundle,
+      capabilities: [...new Set(capabilities)],
+      author: info.owner,
+      session: info.id,
+      workspace: info.workspace,
+    });
+    if (!drafted.ok) return drafted;
+    const blueprint = drafted.value;
+    try {
+      await audit(this.env, "authored", blueprint, info.owner, info.id);
+    } catch (err) {
+      await catalog.discard(blueprint.name, blueprint.version);
+      return fail(503, `the draft was not kept, because it could not be audited: ${err instanceof Error ? err.message : err}`);
+    }
+    this.ctx.storage.kv.put("drafts", drafts + 1);
+    this.count((m) => m.requests++);
+    const checkCell = newId("r");
+    const check = await this.env.CELL.getByName(checkCell).check({
+      id: checkCell,
+      workspace: info.workspace,
+      session: info.id,
+      owner: info.owner,
+      blueprint,
+    });
+    return { ok: true, value: { blueprint, check } };
   }
 
   // Called by an ephemeral cell, which is about to be deleted, when one of
@@ -463,4 +527,25 @@ function toBase64(bytes: Uint8Array): string {
 
 function fromBase64(s: string): Uint8Array {
   return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+}
+
+// Records in the Gatekeeper's audit log that a user authored or published a
+// Blueprint version. Throws if it could not be recorded.
+export async function audit(
+  env: Env,
+  kind: "authored" | "published",
+  b: BlueprintVersion,
+  user: Owner,
+  session?: string,
+): Promise<void> {
+  await gatekeeper(env, "/v1/events", {
+    kind,
+    workspace: b.workspace ?? "",
+    user,
+    blueprint: b.name,
+    version: b.version,
+    bundle: b.bundle,
+    capabilities: b.capabilities,
+    ...(session ? { session } : {}),
+  });
 }
