@@ -59,6 +59,28 @@ export class Catalog extends DurableObject<Env> {
       ctx.storage.sql.exec("ALTER TABLE versions ADD COLUMN authorship TEXT");
       ctx.storage.sql.exec("ALTER TABLE versions ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0");
     }
+    // The fleet's workspaces by name, for the settings page to offer. A
+    // workspace is its own object; this only remembers that it exists.
+    ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS workspaces (name TEXT PRIMARY KEY)");
+  }
+
+  rememberWorkspace(name: string): void {
+    this.ctx.storage.sql.exec("INSERT OR IGNORE INTO workspaces VALUES (?)", name);
+  }
+
+  workspaces(): string[] {
+    return this.ctx.storage.sql
+      .exec<{ name: string }>("SELECT name FROM workspaces ORDER BY name")
+      .toArray()
+      .map((r) => r.name);
+  }
+
+  // Every version a user's agent authored, drafts and published, newest
+  // first.
+  authoredBy(user: string): BlueprintVersion[] {
+    return this.select("WHERE status = 'draft' OR authorship IS NOT NULL ORDER BY created_at DESC, rowid DESC").filter(
+      (v) => v.author?.user === user,
+    );
   }
 
   // Publishes a version with the admin token.

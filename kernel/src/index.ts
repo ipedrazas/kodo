@@ -1,6 +1,7 @@
 import { api } from "./api";
 import type { Env } from "./env";
 import { HOME_PAGE } from "./home";
+import { SETTINGS_PAGE } from "./settings";
 import { cellFromHost } from "./hostname";
 import { CALLER_HEADER, CELL_HEADER, text } from "./http";
 import { IdentityError, identify } from "./identity";
@@ -21,8 +22,9 @@ export default {
     const url = new URL(request.url);
     const cell = cellFromHost(url.hostname);
     const [, first, ...rest] = url.pathname.split("/");
-    const home = !cell && url.pathname === "/" && request.method === "GET";
-    if (!cell && first !== "api" && !home) return text(404, "not found");
+    const settings = !cell && (url.pathname === "/settings" || url.pathname === "/settings/") && request.method === "GET";
+    const page = !cell && request.method === "GET" && (url.pathname === "/" || settings);
+    if (!cell && first !== "api" && !page) return text(404, "not found");
 
     let caller;
     try {
@@ -35,9 +37,10 @@ export default {
     // may read (subject to CORS) but not change anything or open a socket.
     if (crossOrigin(request, url)) return text(403, "cross-origin request refused");
     // A turn token is for the API, and only its own session there.
-    if (caller.kind === "turn" && (cell || home)) return text(403, "a turn token may use only its own session");
-    if (home) {
-      return new Response(HOME_PAGE, {
+    if (caller.kind === "turn" && (cell || page)) return text(403, "a turn token may use only its own session");
+    if (settings && url.pathname === "/settings") return Response.redirect(new URL("/settings/" + url.search, url).toString(), 301);
+    if (page) {
+      return new Response(settings ? SETTINGS_PAGE : HOME_PAGE, {
         headers: {
           "content-type": "text/html; charset=utf-8",
           "content-security-policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",

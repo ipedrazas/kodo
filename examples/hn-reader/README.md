@@ -30,7 +30,7 @@ browser ─► <cell>.g.<domain> ─► kernel ─► hn-reader ── cache, re
 
 You need a fleet with a Gatekeeper that allows reading `hn.algolia.com` (`GATEKEEPER_WEB_ALLOW`; hiddenfield.dev's does) and, for summaries, the inference gateway.
 
-In a browser: create an `hn-reader` cell on the home page, `https://app.hiddenfield.dev/`, and grant it `web:hn.algolia.com/api/v1:read` and a model (pick `inference:model/*:invoke` and replace `*` with `default`). A cell without the grant shows its owner a link to that page. Or with the API, after publishing, using the cookie jar from `test/e2e/lib.sh`'s `login`:
+In a browser: create an `hn-reader` cell on the home page, `https://app.hiddenfield.dev/`, then use its Manage link to grant it `web:hn.algolia.com/api/v1:read` and a model on the settings page (pick `inference:model/*:invoke` and replace `*` with `default`). A cell without the grant shows its owner a link there. Or with the API, after publishing, using the cookie jar from `test/e2e/lib.sh`'s `login`:
 
 ```sh
 kubectl -n kodo apply -k examples/hn-reader
