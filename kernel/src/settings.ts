@@ -46,7 +46,8 @@ export const SETTINGS_PAGE = `<!doctype html>
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .6rem; margin-bottom: 1rem; }
   .stat { border: 1px solid var(--line); border-radius: .5rem; padding: .5rem .7rem; }
   .stat b { display: block; font-size: 1.25rem; font-variant-numeric: tabular-nums; }
-  #error { color: var(--bad); min-height: 1.4em; margin: 0 0 .5rem; }
+  #error { color: var(--bad); margin: 0 0 .75rem; }
+  #error:empty { display: none; }
   .ok { color: var(--good); } .bad { color: var(--bad); }
   [hidden] { display: none !important; }
   @media (max-width: 760px) {
