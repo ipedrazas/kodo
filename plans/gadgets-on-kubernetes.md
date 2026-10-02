@@ -326,7 +326,34 @@ The agent produces a gadget bundle; the kernel stores it by digest and creates a
 
 ---
 
-## Phase 12: Tenancy and hardening
+## Phase 12: Administration
+
+**User stories**: an administrator role; platform settings managed in the product, not in env vars; one dashboard for the fleet.
+
+Today administration is split three ways. Some settings are only reachable with the operator's admin token: workspaces and their quotas, workspace docs, publishing with no author, every cell's usage. Some are environment variables: the agent's model, `AGENT_MAX_TOKENS` and `AGENT_MAX_STEPS`. Some are Kubernetes resources: model routes and token budgets in the inference gateway, fleets, Blueprints and Workspaces as CRDs. No person has an admin role, workspace membership was never built (Phase 5), and a setting that is wrong, such as the agent's 2048-token output limit that cut off larger gadgets, can only be found from the logs.
+
+### What to build
+
+Two roles, both taken from the identity the kernel already verifies. **Platform admins** are an IdP group named in the Fleet, with a bootstrap list of emails for IdPs without groups. **Workspace admins** are members of a workspace with the admin role. Workspace membership comes with this phase: a workspace has members (viewer, member, admin), and only members create cells and chats in it. The admin token stays, for the operator alone, and is no longer how a person administers anything.
+
+Settings that change at runtime move into the kernel, as the state of a `Platform` Durable Object (fleet-wide) and the `Workspace` object (per workspace). That covers the agent's model, output limit and step limit, read by the agent at the start of each turn; workspace quotas, members and docs; and the default grants of new sessions. Settings that are cluster configuration (models and their backends, token budgets, fleets) stay Kubernetes resources, owned through GitOps. The dashboard shows them read-only, with usage against each budget. Whether budgets move into the product is decided in this phase.
+
+An admin dashboard at `app.<domain>/admin/` brings together the fleet (celld nodes, kernel build, health, and Phase 6 metrics if they exist), workspaces (members, quotas, usage, docs), Blueprints (every version, its author and publisher, and withdrawing a published one so no new cell can use it), users (who has used the platform, their usage, suspending one) and the audit log, filtered by user, workspace, cell or Blueprint. Every admin action is a signed event in the Gatekeeper's audit log, like `authored` and `published`, and an action that cannot be recorded does not happen.
+
+### Acceptance criteria
+
+- [ ] A user in the configured IdP group is a platform admin; anyone else gets 403 on every admin endpoint and page
+- [ ] A workspace admin manages members, quota and docs of their workspace and nothing beyond it; a non-member cannot create cells or chats there
+- [ ] Changing the agent's output limit or model in the dashboard applies to the next turn without a restart, and no agent setting is read from the environment except where to find the kernel
+- [ ] A withdrawn Blueprint version cannot be instantiated; existing cells keep running until their owners move them
+- [ ] A suspended user's requests and turns are refused, and their cells are not served to them
+- [ ] The dashboard shows model routes and budgets as they are configured in the cluster, with usage per user and workspace against them
+- [ ] Every admin action is in the audit log with who did it, and the audit log is searchable from the dashboard
+- [ ] Everything the admin token could do for a person can be done by a platform admin through their own login
+
+---
+
+## Phase 13: Tenancy and hardening
 
 **User stories**: layered isolation; per-tenant fleets; high availability.
 
@@ -345,7 +372,7 @@ A fleet per tenant or trust tier, each with its own bucket prefix, credentials a
 
 ---
 
-## Phase 13: Helm chart and install
+## Phase 14: Helm chart and install
 
 **User stories**: runs on any conformant Kubernetes; installable in one afternoon.
 

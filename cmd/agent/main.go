@@ -11,7 +11,8 @@
 //	AGENT_MODEL       the model it thinks with; new sessions are granted
 //	                  inference:model/<AGENT_MODEL>:invoke (default agent)
 //	AGENT_MAX_STEPS   model calls per turn, at most (default 10)
-//	AGENT_MAX_TOKENS  max_tokens of each model call (default 2048)
+//	AGENT_MAX_TOKENS  max_tokens of each model call (default 16384; a gadget is
+//	                  written in one answer)
 package main
 
 import (
@@ -51,7 +52,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	tokens, err := intEnv("AGENT_MAX_TOKENS", 2048)
+	tokens, err := intEnv("AGENT_MAX_TOKENS", 16384)
 	if err != nil {
 		return err
 	}

@@ -3,7 +3,7 @@ import type { BlueprintVersion } from "./catalog";
 import type { CheckRequest, CheckResult, MonthUsage, RunResult } from "./cell";
 import { AGENT_BLUEPRINT } from "./cell";
 import type { Env } from "./env";
-import { type ApprovalStatus, GatekeeperError, SETTLED, type TokenUsage, fromApprovals, gatekeeper } from "./host";
+import { AGENT_MODEL_TIMEOUT_MS, type ApprovalStatus, GatekeeperError, SETTLED, type TokenUsage, fromApprovals, gatekeeper } from "./host";
 import { sha256Hex } from "./http";
 import { isCapability, isName, newId } from "./names";
 import { RUNNER_SOURCE, runnerDigest } from "./runner";
@@ -238,7 +238,7 @@ export class Session extends DurableObject<Env> {
           headers: { "content-type": "application/json" },
           body: toBase64(new TextEncoder().encode(JSON.stringify(request))),
         },
-      });
+      }, AGENT_MODEL_TIMEOUT_MS);
     } catch (err) {
       if (err instanceof GatekeeperError) return fail(err.status, err.message);
       throw err;

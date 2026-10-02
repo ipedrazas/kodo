@@ -11,3 +11,4 @@ configMapGenerator:
     literals:
       - KERNEL_URL=http://kodo.kodo.svc
       - AGENT_MODEL=agent
+      - AGENT_MAX_TOKENS=16384

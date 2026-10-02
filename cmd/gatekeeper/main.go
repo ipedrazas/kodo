@@ -123,8 +123,10 @@ func run(log *slog.Logger) error {
 		Approvals: gatekeeper.Approvals{Store: store, TTL: ttl, Stale: stale},
 		Providers: providers,
 		Users:     users,
-		Upstream:  gatekeeper.NoRedirects(time.Minute),
-		Log:       log,
+		// Each call has its provider's own limit; this is only a backstop,
+		// and must not cut a model call short of INFERENCE_TIMEOUT.
+		Upstream: gatekeeper.NoRedirects(max(time.Minute, inference.CallTimeout())),
+		Log:      log,
 	}
 
 	allow := list(os.Getenv("GATEKEEPER_EGRESS_ALLOW"))

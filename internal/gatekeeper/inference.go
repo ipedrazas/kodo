@@ -38,11 +38,14 @@ type Inference struct {
 // before a backend sees them: they carry only opaque names, never an email
 // address or a cell. The key is removed.
 const (
-	GatewayKeyHeader        = "X-Kodo-Gateway-Key"
-	InferenceUserHeader     = "X-Kodo-User"
-	InferenceWSHeader       = "X-Kodo-Workspace"
-	InferenceBPHeader       = "X-Kodo-Blueprint"
-	DefaultInferenceTimeout = 20 * time.Second
+	GatewayKeyHeader    = "X-Kodo-Gateway-Key"
+	InferenceUserHeader = "X-Kodo-User"
+	InferenceWSHeader   = "X-Kodo-Workspace"
+	InferenceBPHeader   = "X-Kodo-Blueprint"
+	// The longest a model call may take, for the agent writing a whole
+	// gadget in one answer; the gateway bounds each model further, and the
+	// kernel gives a gadget's calls far less.
+	DefaultInferenceTimeout = 120 * time.Second
 )
 
 var inferenceModel = regexp.MustCompile(`^model/([a-z0-9](?:[a-z0-9._-]{0,62}))$`)
