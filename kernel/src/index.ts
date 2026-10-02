@@ -8,6 +8,7 @@ import { IdentityError, identify } from "./identity";
 export { Catalog } from "./catalog";
 export { Cell } from "./cell";
 export { GadgetHost, Keys } from "./host";
+export { Session } from "./session";
 export { Workspace } from "./workspace";
 
 // Session cookies the gateway sets. They are credentials, so they never reach
@@ -33,6 +34,8 @@ export default {
     // Every cell has its own origin; a browser request from any other origin
     // may read (subject to CORS) but not change anything or open a socket.
     if (crossOrigin(request, url)) return text(403, "cross-origin request refused");
+    // A turn token is for the API, and only its own session there.
+    if (caller.kind === "turn" && (cell || home)) return text(403, "a turn token may use only its own session");
     if (home) {
       return new Response(HOME_PAGE, {
         headers: {

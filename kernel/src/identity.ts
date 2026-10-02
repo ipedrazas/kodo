@@ -1,13 +1,19 @@
 import { type AuthConfig, authConfig } from "./config";
 import type { Env } from "./env";
 import { sha256Hex } from "./http";
+import { TURN_HEADER, verifyTurn } from "./turn";
 
 // The gateway forwards the caller's OIDC ID token in this header; the
 // operator sends its admin token in the other.
 export const IDENTITY_HEADER = "x-kodo-identity";
 export const ADMIN_HEADER = "x-kodo-admin-token";
 
-export type Caller = { kind: "admin" } | { kind: "user"; user: string; email: string };
+// A turn is the agent acting for a session's owner during one turn of the
+// session; see turn.ts. It may use only that session.
+export type Caller =
+  | { kind: "admin" }
+  | { kind: "user"; user: string; email: string }
+  | { kind: "turn"; user: string; email: string; workspace: string; session: string; turn: string };
 
 export class IdentityError extends Error {}
 
@@ -21,6 +27,13 @@ export async function identify(request: Request, env: Env): Promise<Caller> {
       return { kind: "admin" };
     }
     throw new IdentityError("invalid admin token");
+  }
+  const turn = request.headers.get(TURN_HEADER);
+  if (turn) {
+    const claims = await verifyTurn(env, turn);
+    if (!claims) throw new IdentityError("invalid or expired turn token");
+    const { user, email, workspace, session } = claims;
+    return { kind: "turn", user, email, workspace, session, turn: claims.turn };
   }
   const token = request.headers.get(IDENTITY_HEADER);
   if (!token) throw new IdentityError("missing identity");

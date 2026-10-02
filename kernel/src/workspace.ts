@@ -2,7 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import type { BlueprintVersion } from "./catalog";
 import type { CellUsage, ModelUsage } from "./cell";
 import type { Env } from "./env";
-import { covers, newCellId } from "./names";
+import { covers, newCellId, newId } from "./names";
+import type { SessionInfo } from "./session";
 
 export type ShareRole = "viewer" | "editor";
 
@@ -30,11 +31,23 @@ export interface WorkspaceInfo {
   cells: number;
 }
 
-// Usage summed over some cells: the whole workspace, or one owner's.
+// One of the workspace's markdown documents (skills, knowledge), which the
+// agent reads when it needs them.
+export interface DocInfo {
+  path: string;
+  // The front matter's description, else the first heading or line.
+  description: string;
+  bytes: number;
+  updatedAt: number;
+}
+
+// Usage summed over some cells and agent sessions: the whole workspace, or
+// one owner's.
 export interface UsageTotals {
   cells: number;
   // Cells that served a request in the month.
   activeCells: number;
+  sessions: number;
   requests: number;
   // The gadgets' databases as last measured; unmeasured cells add nothing.
   storageBytes: number;
@@ -42,6 +55,9 @@ export interface UsageTotals {
 }
 
 export interface CellUsageRow extends CellUsage {
+  // A cell, or a session with the agent (blueprint "agent"), whose model
+  // calls and runs it counts.
+  kind: "cell" | "session";
   id: string;
   blueprint: string;
   version: string;
@@ -61,6 +77,10 @@ export interface WorkspaceUsage {
 
 // How many cells the usage report asks at once.
 const USAGE_CONCURRENCY = 8;
+// Sessions with the agent one owner may keep in a workspace.
+export const MAX_SESSIONS_PER_OWNER = 50;
+const MAX_DOCS = 500;
+export const MAX_DOC_BYTES = 256 * 1024;
 
 export type WorkspaceResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string };
 
@@ -94,6 +114,19 @@ export class Workspace extends DurableObject<Env> {
       cell TEXT NOT NULL,
       capability TEXT NOT NULL,
       PRIMARY KEY (cell, capability)
+    )`);
+    // Added in Phase 10: sessions with the agent, and the workspace's docs.
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      owner_user TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )`);
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS docs (
+      path TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
     )`);
   }
 
@@ -234,21 +267,126 @@ export class Workspace extends DurableObject<Env> {
     return { ok: true, value: null };
   }
 
-  // What the cells did in a month, per cell, per owner and in total. `only`
-  // limits the report to one owner's cells.
+  // Registers a session with the agent and creates it.
+  async createSession(owner: Owner, title: string, grants: string[]): Promise<WorkspaceResult<SessionInfo>> {
+    const info = this.info();
+    if (!info) return fail(404, "workspace does not exist");
+    const n = this.ctx.storage.sql
+      .exec<{ n: number }>("SELECT count(*) AS n FROM sessions WHERE owner_user = ?", owner.user)
+      .one().n;
+    if (n >= MAX_SESSIONS_PER_OWNER) return fail(409, `you have ${MAX_SESSIONS_PER_OWNER} sessions here; delete one first`);
+    const session: SessionInfo = { id: newId("s"), workspace: info.name, title, owner, createdAt: Date.now() };
+    this.ctx.storage.sql.exec(
+      "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
+      session.id,
+      title,
+      owner.user,
+      owner.email,
+      session.createdAt,
+    );
+    try {
+      await this.env.SESSION.getByName(session.id).create(session, grants);
+    } catch (err) {
+      this.ctx.storage.sql.exec("DELETE FROM sessions WHERE id = ?", session.id);
+      throw err;
+    }
+    return { ok: true, value: session };
+  }
+
+  listSessions(): SessionInfo[] {
+    const name = this.info()?.name ?? "";
+    return this.ctx.storage.sql
+      .exec<{ id: string; title: string; owner_user: string; owner_email: string; created_at: number }>(
+        "SELECT * FROM sessions ORDER BY created_at DESC, id",
+      )
+      .toArray()
+      .map((r) => ({
+        id: r.id,
+        workspace: name,
+        title: r.title,
+        owner: { user: r.owner_user, email: r.owner_email },
+        createdAt: r.created_at,
+      }));
+  }
+
+  getSession(id: string): SessionInfo | null {
+    return this.listSessions().find((s) => s.id === id) ?? null;
+  }
+
+  async renameSession(id: string, title: string): Promise<void> {
+    this.ctx.storage.sql.exec("UPDATE sessions SET title = ? WHERE id = ?", title, id);
+    await this.env.SESSION.getByName(id).rename(title);
+  }
+
+  // Deletes a session and its transcript.
+  async deleteSession(id: string): Promise<WorkspaceResult<null>> {
+    if (!this.getSession(id)) return fail(404, "session does not exist in this workspace");
+    await this.env.SESSION.getByName(id).destroy();
+    this.ctx.storage.sql.exec("DELETE FROM sessions WHERE id = ?", id);
+    return { ok: true, value: null };
+  }
+
+  listDocs(): DocInfo[] {
+    return this.ctx.storage.sql
+      .exec<{ path: string; content: string; updated_at: number }>("SELECT * FROM docs ORDER BY path")
+      .toArray()
+      .map((r) => ({
+        path: r.path,
+        description: describeDoc(r.content),
+        bytes: new TextEncoder().encode(r.content).byteLength,
+        updatedAt: r.updated_at,
+      }));
+  }
+
+  getDoc(path: string): string | null {
+    return (
+      this.ctx.storage.sql.exec<{ content: string }>("SELECT content FROM docs WHERE path = ?", path).toArray()[0]
+        ?.content ?? null
+    );
+  }
+
+  // Creates or replaces a document. The caller has checked the path and size.
+  putDoc(path: string, content: string): WorkspaceResult<DocInfo> {
+    if (!this.info()) return fail(404, "workspace does not exist");
+    const exists = this.getDoc(path) !== null;
+    const n = this.ctx.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM docs").one().n;
+    if (!exists && n >= MAX_DOCS) return fail(409, `the workspace has ${MAX_DOCS} documents`);
+    this.ctx.storage.sql.exec("INSERT OR REPLACE INTO docs VALUES (?, ?, ?)", path, content, Date.now());
+    return { ok: true, value: this.listDocs().find((d) => d.path === path)! };
+  }
+
+  deleteDoc(path: string): WorkspaceResult<null> {
+    if (this.getDoc(path) === null) return fail(404, "document does not exist");
+    this.ctx.storage.sql.exec("DELETE FROM docs WHERE path = ?", path);
+    return { ok: true, value: null };
+  }
+
+  // What the cells and agent sessions did in a month, per cell or session,
+  // per owner and in total. `only` limits the report to one owner's.
   async usage(month: string, only?: string): Promise<WorkspaceUsage | null> {
     const info = this.info();
     if (!info) return null;
-    const cells = this.listCells().filter((c) => only === undefined || c.owner.user === only);
+    const mine = (o: Owner) => only === undefined || o.user === only;
+    const cells = [
+      ...this.listCells()
+        .filter((c) => mine(c.owner))
+        .map((c) => ({ kind: "cell" as const, id: c.id, blueprint: c.blueprint, version: c.version, owner: c.owner })),
+      ...this.listSessions()
+        .filter((s) => mine(s.owner))
+        .map((s) => ({ kind: "session" as const, id: s.id, blueprint: "agent", version: s.id, owner: s.owner })),
+    ];
     const rows: CellUsageRow[] = new Array(cells.length);
     let next = 0;
     const worker = async () => {
       while (next < cells.length) {
         const i = next++;
-        const c = cells[i];
-        const row = { id: c.id, blueprint: c.blueprint, version: c.version, owner: c.owner };
+        const row = cells[i];
         try {
-          rows[i] = { ...(await this.env.CELL.getByName(c.id).usage(month)), ...row };
+          const usage =
+            row.kind === "cell"
+              ? await this.env.CELL.getByName(row.id).usage(month)
+              : await this.env.SESSION.getByName(row.id).usage(month);
+          rows[i] = { ...usage, ...row };
         } catch (err) {
           // One cell that cannot answer, e.g. still running an older kernel
           // just after a deploy, does not fail the report.
@@ -286,12 +424,23 @@ export class Workspace extends DurableObject<Env> {
 }
 
 function emptyTotals(): UsageTotals {
-  return { cells: 0, activeCells: 0, requests: 0, storageBytes: 0, inference: { calls: 0, input: 0, output: 0, total: 0 } };
+  return {
+    cells: 0,
+    activeCells: 0,
+    sessions: 0,
+    requests: 0,
+    storageBytes: 0,
+    inference: { calls: 0, input: 0, output: 0, total: 0 },
+  };
 }
 
-function addUsage(t: UsageTotals, row: CellUsage): void {
-  t.cells++;
-  if (row.requests > 0) t.activeCells++;
+function addUsage(t: UsageTotals, row: CellUsageRow): void {
+  if (row.kind === "session") {
+    t.sessions++;
+  } else {
+    t.cells++;
+    if (row.requests > 0) t.activeCells++;
+  }
   t.requests += row.requests;
   t.storageBytes += row.storageBytes ?? 0;
   for (const m of Object.values(row.inference)) {
@@ -300,4 +449,15 @@ function addUsage(t: UsageTotals, row: CellUsage): void {
     t.inference.output += m.output;
     t.inference.total += m.total;
   }
+}
+
+// A document's description: its front matter's `description:`, else its
+// first heading or line.
+function describeDoc(content: string): string {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
+  const described = front && /^description:\s*(.+)$/m.exec(front[1]);
+  if (described) return described[1].trim().replace(/^["']|["']$/g, "").slice(0, 200);
+  const body = front ? content.slice(front[0].length) : content;
+  const line = body.split("\n").map((l) => l.trim()).find((l) => l);
+  return (line ?? "").replace(/^#+\s*/, "").slice(0, 200);
 }

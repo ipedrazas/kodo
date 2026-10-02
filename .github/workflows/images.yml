@@ -1,6 +1,6 @@
 name: Images
 
-# Builds the kernel, operator and Gatekeeper images for amd64 and arm64 and pushes them
+# Builds the kernel, operator, Gatekeeper and agent images for amd64 and arm64 and pushes them
 # to GHCR: :main and :sha-<commit> from main, :pr-<number> from pull requests
 # in this repository.
 on:
@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        image: [kernel, operator, gatekeeper]
+        image: [kernel, operator, gatekeeper, agent]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3

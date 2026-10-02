@@ -10,20 +10,22 @@ The LAN environment: cert-manager, Envoy Gateway, Dex and the operator-managed `
 | Fleet | `Fleet/kodo` in namespace `kodo`, bucket `kodo-dev`, default-deny egress |
 | Gatekeeper | `kodo-gatekeeper` in `kodo-system`, bucket `kodo-dev-gatekeeper`, OpenBao at `openbao.alacasa.uk`; users connect accounts at `app.hiddenfield.dev/gatekeeper/` |
 | Login | `SecurityPolicy/kodo-login`: OIDC with Dex, one session cookie on `.hiddenfield.dev` |
-| Inference gateway | Envoy AI Gateway, namespace `kodo-inference`, Service `kodo-inference.envoy-gateway-system.svc` (Gatekeeper only); models `default` (OpenRouter) and `sim` (in-cluster simulator); budgets in Redis. See [deploy/inference](../inference/README.md) |
+| Inference gateway | Envoy AI Gateway, namespace `kodo-inference`, Service `kodo-inference.envoy-gateway-system.svc` (Gatekeeper only); models `default` and `agent` (OpenRouter) and `sim` (in-cluster simulator); budgets in Redis. See [deploy/inference](../inference/README.md) |
+| Agent | `kodo-agent` in `kodo-system`, the chat at `app.hiddenfield.dev/chat/`; calls the fleet's kernel at `kodo.kodo.svc` and thinks with the model `agent`. See [kernel/AGENT.md](../../kernel/AGENT.md) |
 
 ## Bring it up
 
-`.env` needs the Tigris admin key (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL_IAM`), `CLOUDFLARE_API_TOKEN` (Zone DNS Edit and Zone Read on hiddenfield.dev), `LETSENCRYPT_EMAIL`, the Gatekeeper's OpenBao AppRole, which `task openbao:setup` writes (see [deploy/openbao](../openbao/README.md)), and `OPENROUTER_API_KEY` for the `default` model. The approvals test also needs `RESEND_API_KEY` and `RESEND_FROM`, a From address on a domain verified in that Resend account. `helm` must be on `PATH` for the AI Gateway charts.
+`.env` needs the Tigris admin key (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL_IAM`), `CLOUDFLARE_API_TOKEN` (Zone DNS Edit and Zone Read on hiddenfield.dev), `LETSENCRYPT_EMAIL`, the Gatekeeper's OpenBao AppRole, which `task openbao:setup` writes (see [deploy/openbao](../openbao/README.md)), and `OPENROUTER_API_KEY` for the `default` and `agent` models. The approvals test also needs `RESEND_API_KEY` and `RESEND_FROM`, a From address on a domain verified in that Resend account. `helm` must be on `PATH` for the AI Gateway charts.
 
 ```sh
 BAO_ADDR=http://openbao.alacasa.uk:8200 BAO_TOKEN=<admin> task openbao:setup   # once
 task k3s:up KERNEL_IMAGE=ghcr.io/ipedrazas/kodo-kernel:main OPERATOR_IMAGE=ghcr.io/ipedrazas/kodo-operator:main \
-  GATEKEEPER_IMAGE=ghcr.io/ipedrazas/kodo-gatekeeper:main
+  GATEKEEPER_IMAGE=ghcr.io/ipedrazas/kodo-gatekeeper:main AGENT_IMAGE=ghcr.io/ipedrazas/kodo-agent:main
 task k3s:identity-test
 task k3s:gatekeeper-test        # Phase 7: grants, the Gatekeeper, egress, the vault and audit
 task k3s:approvals-test         # Phase 8: the approval queue; restarts the Gatekeeper twice
 task k3s:inference-test         # Phase 9: models through grants, routing, budgets and usage
+task k3s:agent-test             # Phase 10: the agent's code in ephemeral cells; restarts the agent twice
 ```
 
 ## Bucket keys
@@ -52,3 +54,4 @@ The fleet's nodes can open connections only to DNS, each other, the Gatekeeper (
 1. Envoy Gateway sends a request without a session to Dex. After login, Dex redirects to `app.hiddenfield.dev/oauth2/callback`, and the gateway sets its session cookies on `.hiddenfield.dev`, so one login covers the app and every cell.
 2. The gateway forwards the user's ID token to the kernel in `x-kodo-identity`.
 3. The kernel verifies the token against Dex's keys (fetched in-cluster), checks the cell's owner and shares, and removes the token and session cookies before the gadget sees the request.
+4. On `/chat`, the gateway forwards the token to the agent instead, which passes it to the kernel to create a session or start a turn, and keeps it no longer than that request. For the rest of the turn the agent uses the turn token the kernel gave it, which reaches only that session.

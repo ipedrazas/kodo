@@ -2,8 +2,11 @@ import { KERNEL_BUILD } from "./build";
 import type { Env } from "./env";
 import { sha256Hex } from "./http";
 import type { Caller } from "./identity";
-import type { CellRecord, ShareRole } from "./workspace";
+import { isCellId } from "./hostname";
 import { covers, isCapability, isDigest, isGrant, isName, isVersion } from "./names";
+import type { Message, SessionInfo, SessionResult } from "./session";
+import { signTurn } from "./turn";
+import { type CellRecord, MAX_DOC_BYTES, type ShareRole } from "./workspace";
 
 // The kernel API, served under /api/ on any host that is not a cell host.
 // Every call carries a verified caller: a user, or the operator's admin
@@ -29,9 +32,27 @@ import { covers, isCapability, isDigest, isGrant, isName, isVersion } from "./na
 //   DELETE /api/workspaces/:ws/cells/:id/shares/:email
 //   GET    /api/workspaces/:ws/cells/:id/grants
 //   PUT    /api/workspaces/:ws/cells/:id/grants        {grants: [capability]}
+//   GET    /api/workspaces/:ws/docs
+//   GET    /api/workspaces/:ws/docs/:path              markdown
+//   PUT    /api/workspaces/:ws/docs/:path              body: markdown
+//   DELETE /api/workspaces/:ws/docs/:path
+//   GET    /api/workspaces/:ws/sessions
+//   POST   /api/workspaces/:ws/sessions                {title?, grants?}
+//   GET    /api/workspaces/:ws/sessions/:id?after=N
+//   DELETE /api/workspaces/:ws/sessions/:id
+//   PUT    /api/workspaces/:ws/sessions/:id/grants     {grants: [capability]}
+//   POST   /api/workspaces/:ws/sessions/:id/turns      {content}
+//   DELETE /api/workspaces/:ws/sessions/:id/turns/:turn
+//   POST   /api/workspaces/:ws/sessions/:id/messages   {role, content, ...}
+//   POST   /api/workspaces/:ws/sessions/:id/complete   {model, request}
+//   POST   /api/workspaces/:ws/sessions/:id/runs       {code, input?}
+//   GET    /api/runs/:id                               {bound, keys}
 
 const MAX_BUNDLE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_QUOTA = 100;
+const DEFAULT_SESSION_TITLE = "New chat";
+// Docs paths: lowercase segments ending in .md, e.g. skills/email.md.
+const DOC_PATH = /^(?:[a-z0-9][a-z0-9._-]*\/){0,7}[a-z0-9][a-z0-9._-]*\.md$/;
 
 class ApiError extends Error {
   constructor(
@@ -57,10 +78,19 @@ export async function api(request: Request, env: Env, path: string[], caller: Ca
 async function route(request: Request, env: Env, path: string[], caller: Caller): Promise<Response> {
   const method = request.method;
   const [collection, a, b, c, d, e, ...rest] = path;
-  if (rest.length) throw new ApiError(404, "not found");
+  // Only a document's path may be longer.
+  if (rest.length && !(collection === "workspaces" && b === "docs")) throw new ApiError(404, "not found");
   const admin = () => {
     if (caller.kind !== "admin") throw new ApiError(403, "needs the admin token");
   };
+
+  // A turn may use only its own session, and read its workspace's docs.
+  if (caller.kind === "turn") {
+    const own = collection === "workspaces" && a === caller.workspace;
+    const docs = own && b === "docs" && method === "GET";
+    const session = own && b === "sessions" && c === caller.session && d !== "grants" && !(d === "turns" && method === "POST");
+    if (!docs && !session) throw new ApiError(403, "a turn token may use only its own session");
+  }
 
   if (collection === "version" && a === undefined && method === "GET") return json(200, { build: KERNEL_BUILD });
   if (collection === "whoami" && a === undefined && method === "GET") return json(200, caller);
@@ -84,6 +114,45 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
       admin();
       return publish(request, env, a, b);
     }
+  }
+
+  if (collection === "runs" && a !== undefined && b === undefined && method === "GET") {
+    // Whether anything is left of a run's ephemeral cell.
+    admin();
+    if (!isCellId(a) || !a.startsWith("r")) throw new ApiError(400, "not a run id");
+    return json(200, await env.CELL.getByName(a).residue());
+  }
+
+  if (collection === "workspaces" && a !== undefined && b === "docs") {
+    name(a);
+    const ws = env.WORKSPACE.getByName(a);
+    if (!(await ws.info())) throw new ApiError(404, `workspace ${a} does not exist`);
+    if (c === undefined && method === "GET") return json(200, { docs: await ws.listDocs() });
+    const doc_ = docPath(path.slice(3));
+    if (method === "GET") {
+      const doc = await ws.getDoc(doc_);
+      if (doc === null) throw new ApiError(404, "document does not exist");
+      return new Response(doc, { headers: { "content-type": "text/markdown; charset=utf-8" } });
+    }
+    if (method === "PUT") {
+      admin();
+      const body = await request.arrayBuffer();
+      if (body.byteLength > MAX_DOC_BYTES) throw new ApiError(413, "document larger than 256 KiB");
+      let content: string;
+      try {
+        content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(body);
+      } catch {
+        throw new ApiError(400, "a document is UTF-8 text");
+      }
+      return result(await ws.putDoc(doc_, content));
+    }
+    if (method === "DELETE") {
+      admin();
+      const r = await ws.deleteDoc(doc_);
+      if (!r.ok) throw new ApiError(r.status, r.error);
+      return new Response(null, { status: 204 });
+    }
+    throw new ApiError(404, "not found");
   }
 
   if (collection === "workspaces" && a !== undefined) {
@@ -110,6 +179,7 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
       return json(200, { cells });
     }
     if (b === "cells" && c === undefined && method === "POST") return createCell(request, env, a, caller);
+    if (b === "sessions") return sessions(request, env, a, caller, c, d, e);
     if (b === "cells" && c !== undefined) {
       const cell = await ws.getCell(c);
       if (!cell || !canSee(caller, cell)) throw new ApiError(404, "cell does not exist in this workspace");
@@ -186,11 +256,7 @@ async function publish(request: Request, env: Env, blueprint: string, version: s
 async function createCell(request: Request, env: Env, workspace: string, caller: Caller): Promise<Response> {
   const body = await readJson(request);
   // A user owns the cells they create; the admin token names the owner.
-  let owner = caller.kind === "user" ? { user: caller.user, email: caller.email } : body.owner;
-  if (!owner || typeof owner.user !== "string" || !owner.user || typeof owner.email !== "string") {
-    throw new ApiError(400, "the admin token must name the cell's owner as {user, email}");
-  }
-  owner = { user: owner.user, email: owner.email.toLowerCase() };
+  const owner = ownerOf(caller, body);
   name(body.blueprint);
   if (body.version !== undefined && !isVersion(body.version)) throw new ApiError(400, "invalid version");
   const blueprint =
@@ -223,6 +289,202 @@ async function setGrants(request: Request, env: Env, workspace: string, cell: Ce
     throw new ApiError(400, `${cell.blueprint} ${cell.version} does not declare ${undeclared.join(", ")}`);
   }
   return result(await env.WORKSPACE.getByName(workspace).setGrants(cell.id, grants));
+}
+
+// The agent's sessions. Their owner may do anything with them except write
+// the transcript, which is the agent's, during a turn; the turn's token may
+// read the session, write its transcript, call its models, run code and end
+// the turn, but not change its grants or start another turn.
+async function sessions(
+  request: Request,
+  env: Env,
+  workspace: string,
+  caller: Caller,
+  id: string | undefined,
+  sub: string | undefined,
+  arg: string | undefined,
+): Promise<Response> {
+  const method = request.method;
+  const ws = env.WORKSPACE.getByName(workspace);
+  if (id === undefined) {
+    if (method === "GET") {
+      const mine = (await ws.listSessions()).filter((s) => ownsSession(caller, s));
+      return json(200, { sessions: mine });
+    }
+    if (method === "POST") {
+      const body = await readJson(request);
+      const owner = ownerOf(caller, body);
+      const title = body.title === undefined ? DEFAULT_SESSION_TITLE : sessionTitle(body.title);
+      const grants = body.grants ?? [];
+      checkGrants(grants);
+      const created = await ws.createSession(owner, title, grants);
+      if (!created.ok) throw new ApiError(created.status, created.error);
+      return json(201, await env.SESSION.getByName(created.value.id).view());
+    }
+    throw new ApiError(404, "not found");
+  }
+  const info = await ws.getSession(id);
+  if (!info || !ownsSession(caller, info)) throw new ApiError(404, "session does not exist in this workspace");
+  const session = env.SESSION.getByName(id);
+  // A turn's token works only while its turn is the session's current one.
+  if (caller.kind === "turn" && !(await session.isCurrentTurn(caller.turn))) {
+    throw new ApiError(401, "the turn is over");
+  }
+  const notTurn = () => {
+    if (caller.kind === "turn") throw new ApiError(403, "a turn token cannot do this");
+  };
+  const onlyTurn = () => {
+    if (caller.kind !== "turn" && caller.kind !== "admin") throw new ApiError(403, "only the agent, during a turn, writes the transcript");
+  };
+
+  if (sub === undefined && method === "GET") {
+    const after = Number(new URL(request.url).searchParams.get("after") ?? 0);
+    if (!Number.isInteger(after) || after < 0) throw new ApiError(400, "after must be a message number");
+    return json(200, await session.view(after));
+  }
+  if (sub === undefined && method === "DELETE") {
+    notTurn();
+    const r = await ws.deleteSession(id);
+    if (!r.ok) throw new ApiError(r.status, r.error);
+    return new Response(null, { status: 204 });
+  }
+  if (sub === "grants" && arg === undefined && method === "PUT") {
+    const grants = (await readJson(request)).grants;
+    checkGrants(grants);
+    return result(await session.setGrants(grants));
+  }
+  if (sub === "turns" && arg === undefined && method === "POST") {
+    const content = (await readJson(request)).content;
+    if (typeof content !== "string" || !content.trim()) throw new ApiError(400, "content is required");
+    const started = sessionResult(await session.startTurn(content));
+    if (info.title === DEFAULT_SESSION_TITLE) {
+      const title = content.trim().replace(/\s+/g, " ").slice(0, 60);
+      await ws.renameSession(id, title);
+      started.view.title = title;
+    }
+    const owner = info.owner;
+    const token = await signTurn(env, {
+      workspace,
+      session: id,
+      turn: started.turn.id,
+      user: owner.user,
+      email: owner.email,
+      expiresAt: started.turn.expiresAt,
+    });
+    return json(201, { turn: { ...started.turn, token }, session: started.view });
+  }
+  if (sub === "turns" && arg !== undefined && method === "DELETE") {
+    if (caller.kind === "turn" && caller.turn !== arg) throw new ApiError(403, "a turn token can end only its own turn");
+    sessionResult(await session.endTurn(arg));
+    return new Response(null, { status: 204 });
+  }
+  if (sub === "messages" && arg === undefined && method === "POST") {
+    onlyTurn();
+    return json(201, sessionResult(await session.addMessage(agentMessage(await readJson(request)))));
+  }
+  if (sub === "complete" && arg === undefined && method === "POST") {
+    const body = await readJson(request);
+    if (typeof body.model !== "string" || !/^[a-z0-9][a-z0-9._-]{0,62}$/.test(body.model)) {
+      throw new ApiError(400, "model must be a model name, e.g. agent");
+    }
+    if (!body.request || typeof body.request !== "object") throw new ApiError(400, "request must be a chat completion");
+    const answer = sessionResult(await session.complete(body.model, body.request));
+    return new Response(answer.body, {
+      status: answer.status,
+      headers: {
+        "content-type": answer.headers["content-type"] ?? "application/json",
+        ...pick(answer.headers, ["x-kodo-decision", "x-ratelimit-reset", "x-ratelimit-limit", "x-ratelimit-remaining"]),
+      },
+    });
+  }
+  if (sub === "runs" && arg === undefined && method === "POST") {
+    const body = await readJson(request);
+    if (typeof body.code !== "string" || !body.code.trim()) throw new ApiError(400, "code is required");
+    return json(200, sessionResult(await session.run(body.code, body.input ?? null)));
+  }
+  throw new ApiError(404, "not found");
+}
+
+// What the agent may write to the transcript: its own messages, in the chat
+// completions shape. Events are the kernel's.
+function agentMessage(body: Record<string, any>): Omit<Message, "seq" | "at"> {
+  const { role, content } = body;
+  if (typeof content !== "string") throw new ApiError(400, "content must be a string");
+  if (role === "user") return { role, content };
+  if (role === "assistant") {
+    const calls = body.tool_calls;
+    if (calls === undefined) return { role, content };
+    const valid =
+      Array.isArray(calls) &&
+      calls.length <= 16 &&
+      calls.every(
+        (c) =>
+          c &&
+          typeof c.id === "string" &&
+          c.type === "function" &&
+          typeof c.function?.name === "string" &&
+          typeof c.function?.arguments === "string",
+      );
+    if (!valid) throw new ApiError(400, "tool_calls must be chat completion tool calls");
+    const tool_calls = calls.map((c: any) => ({
+      id: c.id,
+      type: "function" as const,
+      function: { name: c.function.name, arguments: c.function.arguments },
+    }));
+    return { role, content, tool_calls };
+  }
+  if (role === "tool") {
+    if (typeof body.tool_call_id !== "string" || !body.tool_call_id) throw new ApiError(400, "tool_call_id is required");
+    const message: Omit<Message, "seq" | "at"> = { role, content, tool_call_id: body.tool_call_id };
+    if (typeof body.name === "string") message.name = body.name.slice(0, 64);
+    if (typeof body.run === "string" && isCellId(body.run)) message.run = body.run;
+    return message;
+  }
+  throw new ApiError(400, "role must be user, assistant or tool");
+}
+
+function sessionResult<T>(r: SessionResult<T>): T {
+  if (!r.ok) throw new ApiError(r.status, r.error);
+  return r.value;
+}
+
+// The owner of something a caller creates: the user, or whoever the admin
+// token names.
+function ownerOf(caller: Caller, body: Record<string, any>): { user: string; email: string } {
+  if (caller.kind === "user") return { user: caller.user, email: caller.email };
+  if (caller.kind === "turn") throw new ApiError(403, "a turn token cannot do this");
+  const owner = body.owner;
+  if (!owner || typeof owner.user !== "string" || !owner.user || typeof owner.email !== "string") {
+    throw new ApiError(400, "the admin token must name the owner as {user, email}");
+  }
+  return { user: owner.user, email: owner.email.toLowerCase() };
+}
+
+function ownsSession(caller: Caller, session: SessionInfo): boolean {
+  return caller.kind === "admin" || caller.user === session.owner.user;
+}
+
+function sessionTitle(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || value.length > 120) throw new ApiError(400, "title must be 1-120 characters");
+  return value.trim();
+}
+
+function checkGrants(grants: unknown): asserts grants is string[] {
+  if (!Array.isArray(grants) || grants.length > 100 || !grants.every(isGrant)) {
+    throw new ApiError(400, "grants must be a list of <provider>:<resource>:<verb> without wildcards");
+  }
+}
+
+function docPath(segments: string[]): string {
+  const path = segments.join("/");
+  if (!DOC_PATH.test(path) || path.length > 200) {
+    throw new ApiError(400, "a document path is lowercase segments ending in .md, e.g. skills/email.md");
+  }
+  return path;
+}
+
+function pick(headers: Record<string, string>, names: string[]): Record<string, string> {
+  return Object.fromEntries(names.filter((n) => headers[n] !== undefined).map((n) => [n, headers[n]]));
 }
 
 function result<T>(r: { ok: true; value: T } | { ok: false; status: number; error: string }, status = 200): Response {

@@ -6,7 +6,14 @@
     // A gadget call that has not answered after this long is aborted.
     "GADGET_CALL_TIMEOUT_MS": "30000",
     // CPU time a gadget may use per call.
-    "GADGET_CPU_MS": "5000"
+    "GADGET_CPU_MS": "5000",
+    // Each run of the agent's code: how long it may take, the CPU time it
+    // may use (every run on a node shares one isolate, so a runaway run
+    // holds up the others for this long), and how many capability calls it
+    // may make.
+    "AGENT_RUN_TIMEOUT_MS": "60000",
+    "AGENT_RUN_CPU_MS": "2000",
+    "AGENT_RUN_CALLS": "20"
   },
   "worker_loaders": [{ "binding": "LOADER" }],
   "r2_buckets": [
@@ -18,11 +25,13 @@
       { "name": "CELL", "class_name": "Cell" },
       { "name": "CATALOG", "class_name": "Catalog" },
       { "name": "WORKSPACE", "class_name": "Workspace" },
-      { "name": "KEYS", "class_name": "Keys" }
+      { "name": "KEYS", "class_name": "Keys" },
+      { "name": "SESSION", "class_name": "Session" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Cell"] },
-    { "tag": "v2", "new_sqlite_classes": ["Catalog", "Workspace", "Keys"] }
+    { "tag": "v2", "new_sqlite_classes": ["Catalog", "Workspace", "Keys"] },
+    { "tag": "v3", "new_sqlite_classes": ["Session"] }
   ]
 }

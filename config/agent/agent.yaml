@@ -1,0 +1,126 @@
+# The agent in kodo-system: the chat at app.<domain>/chat/. It needs, in the
+# same namespace, ConfigMap kodo-agent with KERNEL_URL (the fleet's Service,
+# e.g. http://kodo.kodo.svc) and optionally AGENT_MODEL, AGENT_MAX_STEPS and
+# AGENT_MAX_TOKENS (see cmd/agent/main.go). It holds no state and no
+# credentials: it acts with the user's ID token, which the gateway forwards,
+# and the turn tokens the kernel issues.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kodo-agent
+  namespace: kodo-system
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kodo-agent
+  namespace: kodo-system
+  labels:
+    app.kubernetes.io/name: kodo-agent
+spec:
+  # Stateless: any replica takes any turn.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kodo-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kodo-agent
+    spec:
+      serviceAccountName: kodo-agent
+      automountServiceAccountToken: false
+      # Turns in progress are interrupted on SIGTERM and say so, within 20 s.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: kodo-agent
+      containers:
+        - name: agent
+          image: ghcr.io/ipedrazas/kodo-agent:main
+          envFrom:
+            - configMapRef:
+                name: kodo-agent
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kodo-agent
+  namespace: kodo-system
+  labels:
+    app.kubernetes.io/name: kodo-agent
+spec:
+  selector:
+    app.kubernetes.io/name: kodo-agent
+  ports:
+    # Users, through the gateway: app.<domain>/chat/.
+    - name: http
+      port: 80
+      targetPort: http
+---
+# The agent takes requests on its one port; the kernel checks the identity
+# on every call it makes, so a request that did not come through the
+# gateway's login gets nowhere. Out of the pod, it reaches only DNS and the
+# public port of fleet nodes.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kodo-agent
+  namespace: kodo-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kodo-agent
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - port: 8080
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              kodo.dev/role: node
+      ports:
+        - port: 8080
