@@ -10,6 +10,7 @@ import { Gadget } from "kodo";
 // saved stories are kept per person, so a cell can be shared by a team.
 //
 //   GET  /                         the page
+//   GET  /api/setup                what is granted, and where the owner grants the rest
 //   GET  /api/stories?list=front   front, new, ask or show: 30 stories; &refresh=1 skips the cache
 //   GET  /api/stories/:id          a story and its comments, as text; marks it read
 //   POST /api/stories/:id/save     saves it, or unsaves a saved one
@@ -66,6 +67,15 @@ export class App extends Gadget {
       });
     }
     if (parts[0] !== "api") return json({ error: "not found" }, 404);
+    if (request.method === "GET" && parts[1] === "setup" && parts.length === 2) {
+      return json({
+        web: Boolean(this.grants[WEB]),
+        models: Object.keys(this.models),
+        role: request.headers.get("x-kodo-role"),
+        cell: this.cellId,
+        workspace: request.headers.get("x-kodo-workspace"),
+      });
+    }
     if (request.method === "GET" && parts[1] === "stories" && parts.length === 2) {
       return this.list(user, url.searchParams.get("list") ?? "front", url.searchParams.get("refresh") === "1");
     }
@@ -317,6 +327,7 @@ const PAGE = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HN Reader</title>
 <style>
+  [hidden] { display: none !important; }
   :root { color-scheme: light dark; --accent: #ff6600; --muted: #828282; --line: rgba(127,127,127,.25); --bad: #b91c1c; }
   body { font: 15px/1.45 Verdana, system-ui, sans-serif; max-width: 70rem; margin: 0 auto; padding: 0 1rem 2rem; }
   header { display: flex; gap: 1rem; align-items: center; background: var(--accent); color: #000; padding: .4rem .7rem; margin: 0 -1rem 1rem; }
@@ -333,6 +344,10 @@ const PAGE = `<!doctype html>
   #summary { white-space: pre-wrap; background: rgba(255,102,0,.08); border-radius: .4rem; padding: .6rem .8rem; margin: .75rem 0; }
   #error { color: var(--bad); min-height: 1.2em; }
   .primary { background: var(--accent); color: #000; border: 0; padding: .3rem .7rem; border-radius: .3rem; cursor: pointer; font: inherit; }
+  a.primary { text-decoration: none; display: inline-block; }
+  #setup { border: 1px solid var(--line); border-radius: .5rem; padding: 1rem 1.25rem; max-width: 40rem; margin: 1rem auto; }
+  #setup h2 { margin: 0 0 .5rem; font-size: 1.1rem; }
+  code { font: 13px ui-monospace, monospace; background: rgba(127,127,127,.15); padding: .05rem .3rem; border-radius: .25rem; }
 </style>
 </head>
 <body>
@@ -342,6 +357,7 @@ const PAGE = `<!doctype html>
   <span id="fetched" class="muted" style="margin-left:auto;color:#000"></span>
 </header>
 <p id="error" role="alert"></p>
+<section id="setup" hidden></section>
 <main>
   <ol id="stories"></ol>
   <section id="story" aria-live="polite"><p class="muted">Pick a story to read its comments.</p></section>
@@ -351,7 +367,28 @@ const $ = (id) => document.getElementById(id);
 const show = (e) => { $("error").textContent = e ? String(e.message ?? e) : ""; };
 const el = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); n.append(...kids); return n; };
 const ago = (ms) => { const m = Math.round((Date.now() - ms) / 60000); return m < 60 ? m + " min ago" : m < 1440 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " d ago"; };
-let current = "", models = [];
+let current = "", models = [], setup;
+
+// Where the cell's owner grants capabilities: the kodo home page, open on
+// this cell.
+function grantLink(text) {
+  const app = location.hostname.replace(/^[^.]+\\.g\\./, "app.");
+  return el("a", { className: "primary", textContent: text,
+    href: "https://" + app + "/?workspace=" + encodeURIComponent(setup.workspace ?? "") + "&cell=" + encodeURIComponent(setup.cell) });
+}
+
+// Without the web grant there is nothing to read: say what is missing, and
+// to the owner, where to grant it.
+function showSetup() {
+  const owner = setup.role === "owner";
+  $("setup").replaceChildren(
+    el("h2", { textContent: "Almost there" }),
+    el("p", {}, "This reader reads Hacker News through the grant ", el("code", { textContent: "web:hn.algolia.com/api/v1:read" }),
+      ", which this cell does not have yet. For summaries of threads, it also needs a model, such as ", el("code", { textContent: "inference:model/default:invoke" }), "."),
+    owner ? el("p", {}, grantLink("Grant them on the kodo home page")) : el("p", { className: "muted", textContent: "Ask this cell's owner to grant it." }));
+  $("setup").hidden = false;
+  document.querySelector("main").hidden = true;
+}
 
 async function call(method, path, body) {
   const res = await fetch(path, { method, headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -392,6 +429,9 @@ async function open(id) {
   try {
     const { story, comments, total, summary, models: granted } = await call("GET", "/api/stories/" + id);
     const summaryBox = el("div", { id: "summary", hidden: !summary, textContent: summary ? summary.text : "" });
+    const noModel = !granted.length && setup?.role === "owner"
+      ? el("p", { className: "muted" }, "Grant this cell a model to get summaries of threads. ", grantLink("Grant a model"))
+      : "";
     const summarise = el("button", { className: "primary", textContent: summary ? "Summarise again" : "Summarise the thread", hidden: !granted.length,
       onclick: async () => {
         summarise.disabled = true; summaryBox.hidden = false; summaryBox.textContent = "Asking " + granted[0] + "…";
@@ -402,7 +442,7 @@ async function open(id) {
       el("h2", {}, link(story)),
       el("div", { className: "meta", textContent: story.points + " points by " + story.author + " " + ago(story.at) + " · " + total + " comments" + (total > comments.length ? ", the first " + comments.length + " shown" : "") }),
       story.text ? el("p", { className: "comment", textContent: story.text }) : "",
-      summarise, summaryBox,
+      summarise, noModel, summaryBox,
       ...comments.map((c) => el("div", { className: "comment", style: "margin-left:" + Math.min(c.depth, 6) * 1.1 + "rem" },
         el("div", { className: "meta", textContent: c.author + " " + ago(c.at) }), c.text)));
     document.getElementById("s" + id)?.classList.add("read");
@@ -410,7 +450,7 @@ async function open(id) {
 }
 
 document.querySelectorAll("header button").forEach((b) => (b.onclick = () => load(b.dataset.list)));
-load("front");
+call("GET", "/api/setup").then((s) => { setup = s; if (s.web) load("front"); else showSetup(); }, show);
 </script>
 </body>
 </html>

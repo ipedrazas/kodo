@@ -7,7 +7,7 @@ It is a port of [Applet.one's Daybreak](https://github.com/applet-one/examples/t
 | File | What |
 | --- | --- |
 | [`gadget.js`](gadget.js) | The gadget: one module that exports `App`, with its page |
-| [`blueprint.yaml`](blueprint.yaml) | Blueprint `daybreak` version `1.0.0`; it needs no capabilities |
+| [`blueprint.yaml`](blueprint.yaml) | Blueprint `daybreak` version `1.0.2`; it needs no capabilities |
 | [`kustomization.yaml`](kustomization.yaml) | The Blueprint and a ConfigMap with the gadget's source |
 
 ## How it works
@@ -38,9 +38,10 @@ You need a fleet (on hiddenfield.dev: `task k3s:up`), a workspace and a login. T
 
 ```sh
 kubectl -n kodo apply -k examples/daybreak
-kubectl -n kodo wait blueprint/daybreak-1.0.0 --for=condition=Published
+kubectl -n kodo wait blueprint/daybreak-1.0.2 --for=condition=Published
 
-# As alice: create the circle and share it with bob.
+# As alice: create the circle and share it with bob (or do both on https://app.hiddenfield.dev/;
+# the circle's page links its owner there to invite friends).
 curl -b jar -H "Origin: https://app.hiddenfield.dev" -H 'content-type: application/json' \
   -d '{"blueprint":"daybreak"}' https://app.hiddenfield.dev/api/workspaces/team/cells
 curl -b jar -X PUT -H "Origin: https://app.hiddenfield.dev" -H 'content-type: application/json' \

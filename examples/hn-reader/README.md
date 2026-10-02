@@ -5,7 +5,7 @@ A kodo gadget for reading Hacker News: the front page, new, Ask HN and Show HN, 
 | File | What |
 | --- | --- |
 | [`gadget.js`](gadget.js) | The gadget: one module that exports `App`, with its page |
-| [`blueprint.yaml`](blueprint.yaml) | Blueprint `hn-reader` version `1.0.0`, declaring `web:hn.algolia.com/api/v1:read` and `inference:model/*:invoke` |
+| [`blueprint.yaml`](blueprint.yaml) | Blueprint `hn-reader` version `1.0.2`, declaring `web:hn.algolia.com/api/v1:read` and `inference:model/*:invoke` |
 | [`kustomization.yaml`](kustomization.yaml) | The Blueprint and a ConfigMap with the gadget's source |
 
 ## How it works
@@ -28,11 +28,13 @@ browser ─► <cell>.g.<domain> ─► kernel ─► hn-reader ── cache, re
 
 ## Deploy it
 
-You need a fleet with a Gatekeeper that allows reading `hn.algolia.com` (`GATEKEEPER_WEB_ALLOW`; hiddenfield.dev's does) and, for summaries, the inference gateway. On hiddenfield.dev, with the cookie jar from `test/e2e/lib.sh`'s `login`:
+You need a fleet with a Gatekeeper that allows reading `hn.algolia.com` (`GATEKEEPER_WEB_ALLOW`; hiddenfield.dev's does) and, for summaries, the inference gateway.
+
+In a browser: create an `hn-reader` cell on the home page, `https://app.hiddenfield.dev/`, and grant it `web:hn.algolia.com/api/v1:read` and a model (pick `inference:model/*:invoke` and replace `*` with `default`). A cell without the grant shows its owner a link to that page. Or with the API, after publishing, using the cookie jar from `test/e2e/lib.sh`'s `login`:
 
 ```sh
 kubectl -n kodo apply -k examples/hn-reader
-kubectl -n kodo wait blueprint/hn-reader-1.0.0 --for=condition=Published
+kubectl -n kodo wait blueprint/hn-reader-1.0.2 --for=condition=Published
 
 curl -b jar -H "Origin: https://app.hiddenfield.dev" -H 'content-type: application/json' \
   -d '{"blueprint":"hn-reader"}' https://app.hiddenfield.dev/api/workspaces/team/cells

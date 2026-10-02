@@ -1,4 +1,4 @@
-# daybreak as Blueprint daybreak 1.0.0 on the fleet "kodo":
+# daybreak as Blueprint daybreak 1.0.2 on the fleet "kodo":
 #   kubectl -n kodo apply -k examples/daybreak
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

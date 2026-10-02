@@ -23,7 +23,8 @@ A class that extends `DurableObject` from `cloudflare:workers` also runs, but ca
 | Surface | What it is |
 | --- | --- |
 | `fetch(request)` | Every HTTP request to the cell's hostname, `<cell-id>.g.<domain>`, from a caller the kernel has already authenticated and authorised. Required. |
-| Caller headers | `x-kodo-user` (the identity provider's subject), `x-kodo-email`, and `x-kodo-role`: `owner`, `editor` or `viewer`. The kernel sets them; a client cannot. |
+| Caller headers | `x-kodo-user` (the identity provider's subject), `x-kodo-email`, and `x-kodo-role`: `owner`, `editor` or `viewer`; and `x-kodo-workspace`, the cell's workspace. The kernel sets them; a client cannot. |
+| Setting up | The cell's owner grants capabilities on the home page, `https://app.<domain>/?workspace=<ws>&cell=<id>`; a gadget missing a grant can link its owner there. |
 | `this.ctx.storage` | The gadget's own SQLite database: `storage.sql` and the synchronous `storage.kv`. It survives restarts, hibernation, moves between nodes and moves to a new Blueprint version. |
 | `this.cellId` | The id of the cell this instance runs in. |
 | `this.setAlarm(when)` | Asks the cell to call `onAlarm()` at `when`, a `Date` or epoch milliseconds. Replaces any earlier alarm. |

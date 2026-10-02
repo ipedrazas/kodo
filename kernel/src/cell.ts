@@ -276,6 +276,7 @@ export class Cell extends DurableObject<Env> {
       headers.set("x-kodo-user", caller.user);
       headers.set("x-kodo-email", caller.email);
       headers.set("x-kodo-role", caller.role);
+      headers.set("x-kodo-workspace", binding.workspace);
       const forwarded = new Request(request, { headers });
       return await this.call(cell, (gadget) => gadget.fetch(forwarded));
     } catch (err) {

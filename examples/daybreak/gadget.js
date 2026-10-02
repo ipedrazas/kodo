@@ -59,7 +59,10 @@ export class App extends Gadget {
     if (parts[0] !== "api") return json({ error: "not found" }, 404);
     const me = this.join(request);
     try {
-      if (request.method === "GET" && parts[1] === "state" && parts.length === 2) return json(this.state(me));
+      if (request.method === "GET" && parts[1] === "state" && parts.length === 2) {
+      // Where the owner shares the cell: the kodo home page, open on it.
+      return json({ ...this.state(me), cell: this.cellId, workspace: request.headers.get("x-kodo-workspace") });
+    }
       if (!me) throw new Refused(403, "only people the cell is shared with can change it");
       if (parts[1] === "slots" && parts.length === 2 && request.method === "POST") {
         const { start, end } = await body(request);
@@ -287,21 +290,24 @@ const PAGE = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Daybreak</title>
 <style>
+  [hidden] { display: none !important; }
   :root { color-scheme: light dark; --accent: #d97706; --muted: #6b7280; --line: #e5e7eb; --bad: #b91c1c; --ok: #15803d; --card: rgba(127,127,127,.06); }
   body { font: 15px/1.5 system-ui, sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
   h1 { font-size: 1.6rem; margin: 0; } h1 span { color: var(--accent); }
   h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
   .muted { color: var(--muted); font-size: .9rem; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1rem; margin-top: 1.25rem; }
-  section { background: var(--card); border: 1px solid var(--line); border-radius: .6rem; padding: 1rem; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: .6rem; padding: 1rem; min-width: 0; }
   ul { list-style: none; margin: 0; padding: 0; } li { padding: .35rem 0; border-bottom: 1px solid var(--line); display: flex; gap: .5rem; align-items: center; justify-content: space-between; }
   li:last-child { border-bottom: 0; }
-  form { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: .4rem; }
-  input, button, select { font: inherit; padding: .3rem .45rem; }
+  #free { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .5rem; }
+  #free input[type="date"] { flex: 1 1 100%; }
+  #free input[type="time"] { flex: 1 1 5.5rem; min-width: 0; }
+  input, button, select { font: inherit; padding: .3rem .45rem; box-sizing: border-box; max-width: 100%; }
   button { cursor: pointer; } button.link { background: none; border: 0; color: var(--accent); padding: 0; }
   .pending { color: var(--accent); } .accepted { color: var(--ok); }
   #error { color: var(--bad); min-height: 1.4em; }
-  dialog form { grid-template-columns: 1fr; min-width: 18rem; }
+  dialog form { display: grid; gap: .4rem; min-width: 18rem; }
 </style>
 </head>
 <body>
@@ -330,7 +336,7 @@ const PAGE = `<!doctype html>
   <section>
     <h2>The circle</h2>
     <ul id="members"></ul>
-    <p class="muted">The cell's owner adds friends by sharing it with them as editors.</p>
+    <p class="muted" id="invite">The cell's owner adds friends by sharing it with them as editors.</p>
   </section>
 </div>
 <dialog id="propose">
@@ -381,6 +387,11 @@ function render(s) {
       el("span", {}, ...actions.map(([label, a]) => el("button", { className: "link", textContent: label + " ", onclick: () => act("POST", "/api/meetings/" + m.id + "/" + a) }))));
   }));
   if (!s.meetings.length) $("meetings").append(el("li", { className: "muted", textContent: "Nothing planned." }));
+  if (s.me?.role === "owner" && s.cell) {
+    const app = location.hostname.replace(/^[^.]+\\.g\\./, "app.");
+    $("invite").replaceChildren("Invite friends by sharing this circle with them as editors on ",
+      el("a", { textContent: "the kodo home page", href: "https://" + app + "/?workspace=" + encodeURIComponent(s.workspace ?? "") + "&cell=" + encodeURIComponent(s.cell) }), ".");
+  }
   $("members").replaceChildren(...s.members.map((m) => el("li", {}, el("span", { textContent: m.email + (m.me ? " (you)" : "") }),
     el("span", { className: "muted", textContent: m.free.length + " free " + (m.free.length === 1 ? "slot" : "slots") }))));
 }

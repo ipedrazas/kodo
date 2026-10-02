@@ -1,14 +1,14 @@
-# Blueprint daybreak 1.0.0. It needs no capabilities: its members, their free
+# Blueprint daybreak 1.0.2. It needs no capabilities: its members, their free
 # time and meetings live in the cell's own database, and the cell's shares
 # say who belongs.
 apiVersion: kodo.dev/v1alpha1
 kind: Blueprint
 metadata:
-  name: daybreak-1.0.0
+  name: daybreak-1.0.2
 spec:
   fleet: kodo
   blueprint: daybreak
-  version: 1.0.0
+  version: 1.0.2
   source:
     name: daybreak
     key: gadget.js
