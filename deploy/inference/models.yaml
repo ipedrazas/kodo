@@ -43,6 +43,14 @@ spec:
       backendRefs:
         - name: openrouter
           modelNameOverride: deepseek/deepseek-v4-flash
+          # DeepSeek V4 Flash reasons without limit by default: asked for a
+          # gadget, it spent 16k tokens thinking and wrote nothing (2 min).
+          # Low effort did not reliably bound it; with reasoning off it
+          # writes the gadget in about 30 s.
+          bodyMutation:
+            set:
+              - path: reasoning
+                value: '{"enabled":false}'
       # The agent writes a whole gadget in one answer: up to AGENT_MAX_TOKENS
       # (16384) at the 230-400 tokens/s DeepSeek gives.
       timeouts:
