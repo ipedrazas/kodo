@@ -18,6 +18,10 @@ A session runs the agent's code in an **ephemeral cell**: a new cell, never serv
 
 A cell serves only while its workspace has bound it; a hostname for any other cell is a 404. Gadget bundles are stored by SHA-256 through the `BUNDLES` R2 binding (`r2/bundles/sha256/<digest>.js` in the fleet bucket), and a cell checks the digest before it runs one.
 
+## Pages
+
+On the app host the kernel also serves two pages, behind the same identity check as the API: `/`, your cells in a workspace and creating one, and `/settings/`, where you manage everything you own. It has sections for the workspace you work in, your cells (grants, shares, version, deleting them), the gadgets your agent wrote (publishing drafts, opening cells from them), your chats' grants, your Gatekeeper connections and pending approvals, and this month's usage. `/settings/?workspace=<ws>&cell=<id>` opens on one cell; the older `/?workspace=<ws>&cell=<id>` forwards there.
+
 ## API
 
 Served under `/api/` on any host that is not a cell hostname. Every request, to the API or a cell, must carry one of:
@@ -52,6 +56,8 @@ Uploading bundles, publishing and configuring workspaces need the admin token. A
 | GET | `/api/workspaces/:ws/cells/:id/grants` | | `{grants: [capability]}` |
 | PUT | `/api/workspaces/:ws/cells/:id/grants` | `{grants: [capability]}` | Replaces the cell's grants; each must be concrete and covered by one its Blueprint version declares. The gadget restarts with the new bindings. |
 | GET | `/api/whoami` | | The verified caller |
+| GET | `/api/workspaces` | | `{workspaces: [name]}`: the workspaces the fleet knows, for the settings page to offer |
+| GET | `/api/blueprints?author=me` | | `{versions: [...]}`: every version the caller's agent wrote, drafts and published, newest first |
 | GET | `/api/workspaces/:ws/docs` | | `{docs: [{path, description, bytes, updatedAt}]}`; the description is the front matter's `description:`, else the first heading or line |
 | GET | `/api/workspaces/:ws/docs/:path` | | The document, as markdown |
 | PUT | `/api/workspaces/:ws/docs/:path` | markdown (at most 256 KiB) | Creates or replaces it (admin token). Paths are lowercase segments ending in `.md`, e.g. `skills/email.md` |

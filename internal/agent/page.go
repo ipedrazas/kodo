@@ -71,7 +71,7 @@ const chatPage = `<!doctype html>
 <body>
 <header>
   <h1>kodo <span class="muted">chat</span></h1>
-  <nav><span id="who" class="muted"></span> · <a href="/">Cells</a> · <a href="/gatekeeper/">Approvals and connections</a> · <a href="/logout">Log out</a></nav>
+  <nav><span id="who" class="muted"></span> · <a href="/">Cells</a> · <a href="/settings/">Settings</a> · <a href="/gatekeeper/">Approvals and connections</a> · <a href="/logout">Log out</a></nav>
 </header>
 <main>
   <aside>
@@ -256,7 +256,7 @@ async function gadgetCard(t, r) {
     try {
       const cell = await api("POST", "/cells", { blueprint: r.name, version: r.version });
       note.replaceChildren("Cell " + cell.id + ": ", el("a", { href: "https://" + cellHost(cell.id) + "/", target: "_blank", rel: "noopener" }, "open it"),
-        ...(caps.length ? [" · ", el("a", { href: "/?workspace=" + encodeURIComponent(ws) + "&cell=" + cell.id }, "grant its capabilities")] : []));
+        ...(caps.length ? [" · ", el("a", { href: "/settings/?workspace=" + encodeURIComponent(ws) + "&cell=" + cell.id + "#cells" }, "grant its capabilities")] : []));
     } catch (err) { note.textContent = String(err.message || err); }
     e.target.disabled = false;
   } }, "Try it"));

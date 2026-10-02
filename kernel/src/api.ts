@@ -21,6 +21,8 @@ import { type CellRecord, MAX_DOC_BYTES, type ShareRole } from "./workspace";
 //   GET    /api/blueprints/:name
 //   PUT    /api/blueprints/:name/:version             {bundle, capabilities?, tier?}
 //   POST   /api/blueprints/:name/:version/publish     publishes a draft
+//   GET    /api/blueprints?author=me                  {versions}: the caller's agent's
+//   GET    /api/workspaces                            {workspaces: [name]}
 //   PUT    /api/workspaces/:ws                        {quota}
 //   GET    /api/workspaces/:ws
 //   GET    /api/workspaces/:ws/usage?month=YYYY-MM
@@ -105,6 +107,10 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
   if (collection === "blueprints") {
     // A user sees published versions and their own drafts.
     const viewer = viewerOf(caller);
+    if (a === undefined && method === "GET" && new URL(request.url).searchParams.get("author") === "me") {
+      if (caller.kind !== "user") throw new ApiError(400, "author=me needs a user");
+      return json(200, { versions: await catalog(env).authoredBy(caller.user) });
+    }
     if (a === undefined && method === "GET") {
       const names = await catalog(env).names(viewer);
       return json(200, { blueprints: names });
@@ -163,6 +169,10 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
     throw new ApiError(404, "not found");
   }
 
+  if (collection === "workspaces" && a === undefined && method === "GET") {
+    return json(200, { workspaces: await catalog(env).workspaces() });
+  }
+
   if (collection === "workspaces" && a !== undefined) {
     name(a);
     const ws = env.WORKSPACE.getByName(a);
@@ -171,11 +181,18 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
       const body = await readJson(request);
       const quota = body.quota ?? DEFAULT_QUOTA;
       if (!Number.isInteger(quota) || quota < 0) throw new ApiError(400, "quota must be a whole number");
-      return json(200, await ws.configure(a, quota));
+      const configured = await ws.configure(a, quota);
+      await catalog(env).rememberWorkspace(a);
+      return json(200, configured);
     }
     const info = await ws.info();
     if (!info) throw new ApiError(404, `workspace ${a} does not exist`);
-    if (b === undefined && method === "GET") return json(200, info);
+    if (b === undefined && method === "GET") {
+      // Workspaces configured before the catalog listed them are listed
+      // once someone opens them.
+      await catalog(env).rememberWorkspace(a);
+      return json(200, info);
+    }
     if (b === "usage" && c === undefined && method === "GET") {
       // The admin token sees every cell; a user sees the cells they own.
       const month = new URL(request.url).searchParams.get("month") ?? new Date().toISOString().slice(0, 7);
