@@ -140,6 +140,7 @@ tasks:
     dir: kernel
     deps: [kernel:install]
     cmds:
+      - node scripts/vendor-ses.mjs --check
       - npm run typecheck
       - npm test
 
@@ -235,9 +236,9 @@ tasks:
       - test/e2e/cluster.sh
 
   k3s:up:
-    desc: The hiddenfield.dev environment on the k3s cluster (KERNEL_IMAGE, OPERATOR_IMAGE and GATEKEEPER_IMAGE required)
+    desc: The hiddenfield.dev environment on the k3s cluster (KERNEL_IMAGE, OPERATOR_IMAGE, GATEKEEPER_IMAGE and AGENT_IMAGE required)
     requires:
-      vars: [KERNEL_IMAGE, OPERATOR_IMAGE, GATEKEEPER_IMAGE]
+      vars: [KERNEL_IMAGE, OPERATOR_IMAGE, GATEKEEPER_IMAGE, AGENT_IMAGE]
     cmds:
       - task: k3s:platform
       - >-
@@ -261,6 +262,7 @@ tasks:
       - kubectl --context {{.K3S_CONTEXT}} apply -f deploy/k3s/routes.yaml
       - kubectl --context {{.K3S_CONTEXT}} -n kodo wait fleet/kodo --for=condition=Ready --timeout=600s
       - task: k3s:inference
+      - task: k3s:agent
 
   k3s:platform:
     desc: Cluster prerequisites on the k3s cluster (cert-manager, Envoy Gateway with Redis, the Envoy AI Gateway controller; needs helm)
@@ -337,6 +339,21 @@ tasks:
       - kubectl --context {{.K3S_CONTEXT}} apply -k deploy/k3s/gatekeeper
       - kubectl --context {{.K3S_CONTEXT}} -n kodo-system set image deploy/kodo-gatekeeper gatekeeper={{.GATEKEEPER_IMAGE}}
       - kubectl --context {{.K3S_CONTEXT}} -n kodo-system rollout status deploy/kodo-gatekeeper --timeout=300s
+
+  k3s:agent:
+    desc: Deploy the agent to kodo-system on the k3s cluster and route app.hiddenfield.dev/chat to it (AGENT_IMAGE required)
+    requires:
+      vars: [AGENT_IMAGE]
+    cmds:
+      - kubectl --context {{.K3S_CONTEXT}} apply -k deploy/k3s/agent
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo-system set image deploy/kodo-agent agent={{.AGENT_IMAGE}}
+      - kubectl --context {{.K3S_CONTEXT}} apply -f deploy/k3s/routes.yaml
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo-system rollout status deploy/kodo-agent --timeout=300s
+
+  k3s:agent-test:
+    desc: Check the agent end to end on hiddenfield.dev (OPENROUTER_API_KEY for the agent's model; RESEND_API_KEY and RESEND_FROM for the approval check; restarts the agent)
+    cmds:
+      - test/e2e/agent.sh
 
   k3s:gatekeeper-test:
     desc: Check the Gatekeeper read path end to end on hiddenfield.dev (GITHUB_TOKEN, or the gh CLI's token)

@@ -36,7 +36,7 @@ export const HOME_PAGE = `<!doctype html>
 <body>
 <header>
   <h1>kodo</h1>
-  <span><span id="who" class="muted"></span> · <a href="/gatekeeper/" id="approvals">Approvals and connections</a> · <a href="/logout">Log out</a></span>
+  <span><span id="who" class="muted"></span> · <a href="/chat/" id="chat">Chat with the agent</a> · <a href="/gatekeeper/" id="approvals">Approvals and connections</a> · <a href="/logout">Log out</a></span>
 </header>
 <p id="error" role="alert"></p>
 

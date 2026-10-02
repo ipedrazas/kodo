@@ -1,0 +1,7 @@
+# The agent, without its configuration: kubectl apply -k config/agent needs
+# the ConfigMap kodo-agent listed in agent.yaml. An overlay such as
+# deploy/k3s/agent provides it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - agent.yaml

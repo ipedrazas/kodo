@@ -1,5 +1,6 @@
 # app.hiddenfield.dev (the API) and every cell hostname go to the kodo fleet,
-# and app.hiddenfield.dev/gatekeeper/ to the Gatekeeper, behind an OIDC login. One session cookie on .hiddenfield.dev covers the app
+# app.hiddenfield.dev/gatekeeper/ to the Gatekeeper and /chat to the agent,
+# behind an OIDC login. One session cookie on .hiddenfield.dev covers the app
 # and every cell; the gateway forwards the ID token to the kernel in
 # x-kodo-identity, and the kernel verifies it and strips it, and the session
 # cookies, before anything reaches a gadget.
@@ -37,6 +38,9 @@ spec:
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
       name: kodo-gatekeeper
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kodo-agent
   oidc:
     provider:
       issuer: https://auth.hiddenfield.dev
@@ -79,6 +83,29 @@ spec:
           namespace: kodo-system
           port: 80
 ---
+# The agent's chat and its API. Only on the app host.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kodo-agent
+  namespace: kodo
+spec:
+  parentRefs:
+    - name: kodo
+      namespace: kodo-gateway
+      sectionName: https
+  hostnames:
+    - app.hiddenfield.dev
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chat
+      backendRefs:
+        - name: kodo-agent
+          namespace: kodo-system
+          port: 80
+---
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
@@ -93,3 +120,6 @@ spec:
     - group: ""
       kind: Service
       name: kodo-gatekeeper
+    - group: ""
+      kind: Service
+      name: kodo-agent
