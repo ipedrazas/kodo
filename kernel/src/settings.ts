@@ -35,7 +35,7 @@ export const SETTINGS_PAGE = `<!doctype html>
   .tag { font-size: .78rem; border-radius: .3rem; padding: 0 .4rem; background: var(--soft); }
   .tag.draft { background: rgba(250, 204, 21, .25); }
   .tag.published { background: rgba(21, 128, 61, .15); }
-  input, select, button { font: inherit; padding: .25rem .5rem; }
+  input, select, button, textarea { font: inherit; padding: .25rem .5rem; }
   input.mono { font: 13px ui-monospace, monospace; min-width: min(22rem, 100%); }
   button { cursor: pointer; }
   button.danger { color: var(--bad); }
@@ -61,7 +61,7 @@ export const SETTINGS_PAGE = `<!doctype html>
 <body>
 <header>
   <h1>kodo <span class="muted">settings</span></h1>
-  <nav><span id="who" class="muted"></span> · <a href="/">Cells</a> · <a href="/chat/">Chat</a> · <a href="/gatekeeper/" id="approvals">Approvals and connections</a> · <a href="/logout">Log out</a></nav>
+  <nav><span id="who" class="muted"></span> · <span id="admin-link" hidden><a href="/admin/">Admin</a> · </span><a href="/">Cells</a> · <a href="/chat/">Chat</a> · <a href="/gatekeeper/" id="approvals">Approvals and connections</a> · <a href="/logout">Log out</a></nav>
 </header>
 <div class="layout">
   <aside id="nav">
@@ -86,6 +86,7 @@ export const SETTINGS_PAGE = `<!doctype html>
         </div>
         <div class="row" id="ws-info"></div>
       </div>
+      <div id="ws-admin"></div>
     </section>
     <section id="section-cells" hidden>
       <h2>Cells</h2>
@@ -206,12 +207,55 @@ async function showWorkspace() {
   select.replaceChildren(...known.map((n) => el("option", { value: n, selected: n === ws }, n)), el("option", { value: "" }, "Other…"));
   select.onchange = () => { $("ws-other").hidden = select.value !== ""; if (!select.value) $("ws-other").focus(); };
   $("ws-other").hidden = true;
+  $("ws-admin").replaceChildren();
   try {
     const info = await wsApi("GET", "");
-    $("ws-info").replaceChildren(el("span", { class: "label" }, "Cells"), el("span", {}, number(info.cells) + " of " + number(info.quota) + " in the workspace"));
+    $("ws-info").replaceChildren(el("span", { class: "label" }, "Cells"), el("span", {}, number(info.cells) + " of " + number(info.quota) + " in the workspace"),
+      el("span", { class: "label" }, "Your role"), el("span", {}, info.role || "not a member: you can open cells shared with you, but not create cells or chats here"));
+    if (info.role === "admin") $("ws-admin").replaceChildren(...(await workspaceAdmin(info)));
   } catch (err) {
     $("ws-info").replaceChildren(el("span", { class: "bad" }, String(err.message || err)));
   }
+}
+
+// What a workspace's admins manage: its quota, members and docs. Every
+// change is recorded in the audit log.
+async function workspaceAdmin(info) {
+  const [{ members }, { docs }] = await Promise.all([wsApi("GET", "/members"), wsApi("GET", "/docs")]);
+  const quota = el("input", { type: "number", min: 0, value: info.quota, "aria-label": "Quota", style: "width: 8rem" });
+  const roles = (value) => { const r = el("select", { "aria-label": "Role" }, ["viewer", "member", "admin"].map((x) => el("option", { value: x }, x))); r.value = value; return r; };
+  const email = el("input", { type: "email", required: true, placeholder: "email", "aria-label": "Member's email" });
+  const newRole = roles("member");
+  const path = el("input", { class: "mono", required: true, placeholder: "skills/email.md", "aria-label": "Document path" });
+  const content = el("textarea", { class: "mono", rows: 6, style: "width: 100%", required: true, "aria-label": "Document" });
+  const docUrl = (p) => "/docs/" + p.split("/").map(encodeURIComponent).join("/");
+  return [
+    el("div", { class: "card" }, el("h3", {}, "Quota"),
+      el("form", { onsubmit: (e) => { e.preventDefault(); act(() => wsApi("PUT", "", { quota: Number(quota.value) })); } },
+        el("div", { class: "row" }, el("span", { class: "label" }, "Cells"), quota, el("button", {}, "Save")))),
+    el("div", { class: "card" }, el("h3", {}, "Members"),
+      el("p", { class: "muted hint" }, "Viewers see the workspace; members also create cells and chats; admins also manage this."),
+      el("table", {}, el("tbody", {}, members.map((m) => {
+        const r = roles(m.role);
+        const self = m.email === me.email;
+        r.disabled = self;
+        r.onchange = () => act(() => wsApi("PUT", "/members/" + encodeURIComponent(m.email), { role: r.value }));
+        return el("tr", {}, el("td", {}, m.email), el("td", {}, r), el("td", {}, self ? el("span", { class: "muted hint" }, "you") :
+          el("button", { type: "button", class: "danger", onclick: () => { if (confirm("Remove " + m.email + " from " + ws + "? Their cells and chats stay theirs.")) act(() => wsApi("DELETE", "/members/" + encodeURIComponent(m.email))); } }, "Remove")));
+      }))),
+      el("form", { onsubmit: (e) => { e.preventDefault(); act(() => wsApi("PUT", "/members/" + encodeURIComponent(email.value.trim()), { role: newRole.value })); } },
+        el("div", { class: "row" }, el("span", { class: "label" }, "Add"), email, newRole, el("button", {}, "Add")))),
+    el("div", { class: "card" }, el("h3", {}, "Docs"),
+      el("p", { class: "muted hint" }, "Markdown the agent lists in its prompt and reads when it needs it."),
+      docs.length ? el("table", {}, el("tbody", {}, docs.map((d) => el("tr", {}, el("td", { class: "mono" }, d.path), el("td", {}, d.description),
+        el("td", {}, el("button", { type: "button", onclick: async () => { path.value = d.path; content.value = await call("GET", "/api/workspaces/" + encodeURIComponent(ws) + docUrl(d.path)); path.focus(); } }, "Edit"),
+          el("button", { type: "button", class: "danger", onclick: () => { if (confirm("Delete " + d.path + "?")) act(() => wsApi("DELETE", docUrl(d.path))); } }, "Delete")))))) : el("p", { class: "muted" }, "No docs yet."),
+      el("form", { onsubmit: (e) => { e.preventDefault(); act(() => fetch("/api/workspaces/" + encodeURIComponent(ws) + docUrl(path.value.trim()), { method: "PUT", headers: { "content-type": "text/markdown" }, body: content.value })
+        .then(async (res) => { if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status); })); } },
+        el("div", { class: "row" }, el("span", { class: "label" }, "Write"), path),
+        el("div", { class: "row" }, content),
+        el("div", { class: "row" }, el("button", {}, "Save document")))),
+  ];
 }
 $("ws-open").onclick = () => {
   const next = $("ws-select").value || $("ws-other").value.trim();
@@ -435,6 +479,7 @@ if ("scrollRestoration" in history) history.scrollRestoration = "manual";
   try {
     me = await api("GET", "/whoami");
     $("who").textContent = me.email || me.user;
+    $("admin-link").hidden = !me.platformAdmin;
   } catch (err) { showError(err); return; }
   localStorage.setItem("kodo.workspace", ws);
   remember();

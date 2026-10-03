@@ -26,12 +26,14 @@
       { "name": "CATALOG", "class_name": "Catalog" },
       { "name": "WORKSPACE", "class_name": "Workspace" },
       { "name": "KEYS", "class_name": "Keys" },
-      { "name": "SESSION", "class_name": "Session" }
+      { "name": "SESSION", "class_name": "Session" },
+      { "name": "PLATFORM", "class_name": "Platform" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Cell"] },
     { "tag": "v2", "new_sqlite_classes": ["Catalog", "Workspace", "Keys"] },
-    { "tag": "v3", "new_sqlite_classes": ["Session"] }
+    { "tag": "v3", "new_sqlite_classes": ["Session"] },
+    { "tag": "v4", "new_sqlite_classes": ["Platform"] }
   ]
 }

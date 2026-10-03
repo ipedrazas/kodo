@@ -15,7 +15,7 @@ before(async () => {
     vars: { GADGET_CALL_TIMEOUT_MS: String(TIMEOUT_MS), GADGET_CPU_MS: String(CPU_MS) },
     env: { CELLD_IDLE_EVICT_S: String(IDLE_EVICT_S) },
   });
-  await kernel.api("PUT", "/workspaces/test", { quota: 1000 });
+  await kernel.workspace("test", { quota: 1000 });
   await kernel.publish("test/gadgets/fixture.js", "fixture", "1");
   await kernel.publish("test/gadgets/no-app.js", "no-app", "1");
   await kernel.publish("test/gadgets/http-only.js", "http-only", "1");

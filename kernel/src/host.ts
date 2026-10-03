@@ -2,6 +2,7 @@ import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { gatekeeperConfig } from "./config";
 import type { Env } from "./env";
 import { isCapability } from "./names";
+import { platform } from "./platform";
 
 // What the cell hands a gadget in `ctx.props`. The gadget passes it back to
 // the kernel on every host call, and the token proves which cell it is. The
@@ -142,6 +143,11 @@ export class GadgetHost extends WorkerEntrypoint<Env> {
     const context = await this.env.CELL.getByName(cell).callContext();
     if (!context) return denied(404, `cell ${cell} does not exist`);
     if ("refused" in context) return denied(context.status, context.refused);
+    const metered = MODEL_CAPABILITY.test(capability);
+    if (metered) {
+      const over = await overBudget(this.env, context.owner.user, context.workspace);
+      if (over) return denied(429, over);
+    }
 
     let res: Response;
     try {
@@ -170,6 +176,7 @@ export class GadgetHost extends WorkerEntrypoint<Env> {
       } catch (err) {
         console.log(`cell ${cell}: counting usage failed: ${err instanceof Error ? err.message : err}`);
       }
+      if (metered) await spend(this.env, context.owner.user, context.workspace, raw.usage);
     }
     // A call parked for approval: the cell follows it and tells the gadget
     // how it ends.
@@ -196,6 +203,29 @@ interface Answer {
   headers?: Record<string, string>;
   body?: string;
   usage?: TokenUsage;
+}
+
+// A model call, which counts against its owner's and its workspace's
+// monthly token budgets.
+export const MODEL_CAPABILITY = /^inference:model\/[^:/]+:invoke$/;
+
+// Why a model call for this owner in this workspace is refused, or null if
+// both have budget left.
+export async function overBudget(env: Env, user: string, workspace: string): Promise<string | null> {
+  const check = await platform(env).checkBudget(user, workspace);
+  if (check.ok) return null;
+  const whose = check.scope === "user" ? "the owner's" : `workspace ${workspace}'s`;
+  return `${whose} monthly budget of ${check.budget.toLocaleString("en")} model tokens is spent`;
+}
+
+// Counts what a model call used against the budgets. A failure is logged:
+// the call has been made.
+export async function spend(env: Env, user: string, workspace: string, usage: TokenUsage): Promise<void> {
+  try {
+    await platform(env).spend(user, workspace, usage);
+  } catch (err) {
+    console.log(`counting model spend failed: ${err instanceof Error ? err.message : err}`);
+  }
 }
 
 // Tokens one model call used, as its backend reported them.

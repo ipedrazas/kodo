@@ -27,7 +27,7 @@ function answer(call) {
 
 before(async () => {
   kernel = await startKernel({ gatekeeper: answer, env: { CELLD_IDLE_EVICT_S: String(IDLE_EVICT_S) } });
-  await kernel.api("PUT", "/workspaces/mail", { quota: 100 });
+  await kernel.workspace("mail", { quota: 100 });
   const digest = (await kernel.api("POST", "/bundles", await readFile(FIXTURE))).body.digest;
   assert.equal((await kernel.api("PUT", "/blueprints/mailer/1", { bundle: digest, capabilities: [SEND] })).status, 201);
 });

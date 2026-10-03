@@ -2,6 +2,8 @@
 # Deploys the kernel with its identity settings from the environment:
 #   OIDC_ISSUER, OIDC_AUDIENCE, OIDC_JWKS_URL   the identity provider
 #   KERNEL_ADMIN_TOKEN                          the operator's admin token
+#   PLATFORM_ADMIN_GROUP, PLATFORM_ADMIN_GROUPS_CLAIM, PLATFORM_ADMIN_EMAILS
+#                                               who the platform admins are
 # and, for capability calls, the Gatekeeper:
 #   GATEKEEPER_URL, GATEKEEPER_KEY, FLEET_ID    where it is, the fleet's
 #                                               signing key, <namespace>/<fleet>
@@ -34,6 +36,9 @@ export const DEPLOY_CONFIG = {
   gatekeeperUrl: $(quote "${GATEKEEPER_URL:-}"),
   gatekeeperKey: $(quote "${GATEKEEPER_KEY:-}"),
   fleet: $(quote "${FLEET_ID:-}"),
+  adminGroup: $(quote "${PLATFORM_ADMIN_GROUP:-}"),
+  adminGroupsClaim: $(quote "${PLATFORM_ADMIN_GROUPS_CLAIM:-}"),
+  adminEmails: $(quote "${PLATFORM_ADMIN_EMAILS:-}"),
 };
 TS
 exec celld deploy "$work" "$@"

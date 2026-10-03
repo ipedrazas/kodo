@@ -3,7 +3,17 @@ import type { BlueprintVersion } from "./catalog";
 import type { CheckRequest, CheckResult, MonthUsage, RunResult } from "./cell";
 import { AGENT_BLUEPRINT } from "./cell";
 import type { Env } from "./env";
-import { AGENT_MODEL_TIMEOUT_MS, type ApprovalStatus, GatekeeperError, SETTLED, type TokenUsage, fromApprovals, gatekeeper } from "./host";
+import {
+  AGENT_MODEL_TIMEOUT_MS,
+  type ApprovalStatus,
+  GatekeeperError,
+  SETTLED,
+  type TokenUsage,
+  fromApprovals,
+  gatekeeper,
+  overBudget,
+  spend,
+} from "./host";
 import { sha256Hex } from "./http";
 import { isCapability, isName, newId } from "./names";
 import { RUNNER_SOURCE, runnerDigest } from "./runner";
@@ -179,6 +189,11 @@ export class Session extends DurableObject<Env> {
     return { ok: true, value: this.grants() };
   }
 
+  // Adds one grant, if the session lacks it.
+  async addGrant(grant: string): Promise<void> {
+    if (this.info() && !this.grants().includes(grant)) this.ctx.storage.kv.put("grants", [...this.grants(), grant].sort());
+  }
+
   // Starts a turn with the owner's message. One turn at a time: a second is
   // refused until the first ends or runs out of time.
   async startTurn(content: string): Promise<SessionResult<{ turn: Turn; view: SessionView }>> {
@@ -222,6 +237,13 @@ export class Session extends DurableObject<Env> {
     if (!info) return fail(404, "session does not exist");
     const capability = `inference:model/${model}:invoke`;
     if (!this.grants().includes(capability)) return fail(403, `the session has no grant for ${capability}`);
+    const over = await overBudget(this.env, info.owner.user, info.workspace);
+    if (over) {
+      return {
+        ok: true,
+        value: { status: 429, headers: { "content-type": "application/json", "x-kodo-decision": "error" }, body: JSON.stringify({ error: over }) },
+      };
+    }
     let res: Response;
     try {
       res = await gatekeeper(this.env, "/v1/calls", {
@@ -244,7 +266,10 @@ export class Session extends DurableObject<Env> {
       throw err;
     }
     const answer = (await res.json()) as { status: number; headers?: Record<string, string>; body?: string; usage?: TokenUsage };
-    if (answer.usage) await this.recordUsage(capability, answer.usage);
+    if (answer.usage) {
+      await this.recordUsage(capability, answer.usage);
+      await spend(this.env, info.owner.user, info.workspace, answer.usage);
+    }
     return {
       ok: true,
       value: {

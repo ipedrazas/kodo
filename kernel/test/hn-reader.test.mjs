@@ -43,7 +43,7 @@ function gatekeeper(call) {
 
 before(async () => {
   kernel = await startKernel({ gatekeeper });
-  await kernel.api("PUT", "/workspaces/news", {});
+  await kernel.workspace("news", {});
   const source = await readFile(new URL("../../examples/hn-reader/gadget.js", import.meta.url));
   const digest = (await kernel.api("POST", "/bundles", source)).body.digest;
   const res = await kernel.api("PUT", "/blueprints/hn-reader/1.0.0", { bundle: digest, capabilities: [WEB, "inference:model/*:invoke"] });

@@ -8,8 +8,8 @@ let kernel;
 
 before(async () => {
   kernel = await startKernel({ gatekeeper: true });
-  await kernel.api("PUT", "/workspaces/team", { quota: 10 });
-  await kernel.api("PUT", "/workspaces/lab", { quota: 10 });
+  await kernel.workspace("team", { quota: 10 });
+  await kernel.workspace("lab", { quota: 10 });
 });
 
 after(async () => {

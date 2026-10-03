@@ -11,7 +11,7 @@ const FIXTURE = new URL("./gadgets/capabilities.js", import.meta.url);
 
 before(async () => {
   kernel = await startKernel({ gatekeeper: true });
-  await kernel.api("PUT", "/workspaces/caps", { quota: 100 });
+  await kernel.workspace("caps", { quota: 100 });
   const source = await kernel.api("POST", "/bundles", await readFile(FIXTURE));
   const declare = (version, capabilities) =>
     kernel.api("PUT", `/blueprints/caps/${version}`, { bundle: source.body.digest, capabilities });
@@ -152,7 +152,7 @@ describe("without a Gatekeeper", () => {
   });
 
   test("a binding answers 503", async () => {
-    await bare.api("PUT", "/workspaces/caps", {});
+    await bare.workspace("caps", {});
     const digest = (await bare.api("POST", "/bundles", await readFile(FIXTURE))).body.digest;
     await bare.api("PUT", "/blueprints/caps/1", { bundle: digest, capabilities: [REPO] });
     const cell = (await bare.createCell("caps", "caps", "1")).id;

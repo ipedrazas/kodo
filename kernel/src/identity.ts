@@ -9,10 +9,12 @@ export const IDENTITY_HEADER = "x-kodo-identity";
 export const ADMIN_HEADER = "x-kodo-admin-token";
 
 // A turn is the agent acting for a session's owner during one turn of the
-// session; see turn.ts. It may use only that session.
+// session; see turn.ts. It may use only that session. A user who is a
+// platform admin carries `platformAdmin`; a turn never does, whoever its
+// owner is.
 export type Caller =
   | { kind: "admin" }
-  | { kind: "user"; user: string; email: string }
+  | { kind: "user"; user: string; email: string; platformAdmin?: true }
   | { kind: "turn"; user: string; email: string; workspace: string; session: string; turn: string };
 
 export class IdentityError extends Error {}
@@ -43,8 +45,26 @@ export async function identify(request: Request, env: Env): Promise<Caller> {
   const claims = await verifyJwt(token, config);
   if (typeof claims.sub !== "string" || !claims.sub) throw new IdentityError("token has no subject");
   const email = typeof claims.email === "string" ? claims.email.toLowerCase() : "";
-  return { kind: "user", user: claims.sub, email };
+  const caller: Caller = { kind: "user", user: claims.sub, email };
+  if (isPlatformAdmin(claims, email, config)) caller.platformAdmin = true;
+  return caller;
 }
+
+// Whether a verified token names a platform admin: a member of the
+// configured group, or one of the bootstrap emails, if the IdP has not said
+// the email is unverified.
+function isPlatformAdmin(claims: Record<string, unknown>, email: string, config: AuthConfig): boolean {
+  if (config.adminGroup) {
+    const groups = claims[config.adminGroupsClaim];
+    if (Array.isArray(groups) ? groups.includes(config.adminGroup) : groups === config.adminGroup) return true;
+  }
+  return Boolean(email) && claims.email_verified !== false && config.adminEmails.includes(email);
+}
+
+// Whether a caller may administer the platform: the operator's admin token,
+// or a platform admin through their own login.
+export const isAdmin = (caller: Caller): boolean =>
+  caller.kind === "admin" || (caller.kind === "user" && caller.platformAdmin === true);
 
 interface Jwk extends JsonWebKey {
   kid?: string;

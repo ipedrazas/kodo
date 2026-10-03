@@ -1,19 +1,22 @@
+import { AdminError, adminApi, adminEvent } from "./admin";
 import { KERNEL_BUILD } from "./build";
 import type { Env } from "./env";
 import { sha256Hex } from "./http";
-import type { Caller } from "./identity";
+import { type Caller, isAdmin } from "./identity";
 import { isCellId } from "./hostname";
 import { covers, isCapability, isDigest, isGrant, isName, isVersion } from "./names";
 import type { Viewer } from "./catalog";
+import { defaultSessionGrants, modelGrant, platform } from "./platform";
 import { type Message, type SessionInfo, type SessionResult, audit } from "./session";
 import { signTurn } from "./turn";
-import { type CellRecord, MAX_DOC_BYTES, type ShareRole } from "./workspace";
+import { type CellRecord, MAX_DOC_BYTES, MEMBER_ROLES, type MemberRole, type ShareRole } from "./workspace";
 
 // The kernel API, served under /api/ on any host that is not a cell host.
-// Every call carries a verified caller: a user, or the operator's admin
-// token. Publishing and workspace settings need the admin token; any user may
-// create cells, and sees and manages only their own and those shared with
-// them.
+// Every call carries a verified caller: a user, a turn, or the operator's
+// admin token. Platform admins (and the admin token) publish, create
+// workspaces and change the platform's settings; a workspace's admins manage
+// its members, quota and docs; its members create cells and chats in it.
+// A user sees and manages only their own cells and those shared with them.
 //
 //   GET    /api/version                               {build}
 //   POST   /api/bundles                               body: gadget source
@@ -21,10 +24,15 @@ import { type CellRecord, MAX_DOC_BYTES, type ShareRole } from "./workspace";
 //   GET    /api/blueprints/:name
 //   PUT    /api/blueprints/:name/:version             {bundle, capabilities?, tier?}
 //   POST   /api/blueprints/:name/:version/publish     publishes a draft
+//   POST   /api/blueprints/:name/:version/withdraw    no new cell may use it
+//   POST   /api/blueprints/:name/:version/restore
 //   GET    /api/blueprints?author=me                  {versions}: the caller's agent's
-//   GET    /api/workspaces                            {workspaces: [name]}
-//   PUT    /api/workspaces/:ws                        {quota}
-//   GET    /api/workspaces/:ws
+//   GET    /api/workspaces                            {workspaces: [name], memberships}
+//   PUT    /api/workspaces/:ws                        {quota?, members?}
+//   GET    /api/workspaces/:ws                        {name, quota, cells, members, role}
+//   GET    /api/workspaces/:ws/members
+//   PUT    /api/workspaces/:ws/members/:email         {role: viewer|member|admin}
+//   DELETE /api/workspaces/:ws/members/:email
 //   GET    /api/workspaces/:ws/usage?month=YYYY-MM
 //   GET    /api/workspaces/:ws/cells
 //   POST   /api/workspaces/:ws/cells                  {blueprint, version?}
@@ -52,6 +60,8 @@ import { type CellRecord, MAX_DOC_BYTES, type ShareRole } from "./workspace";
 //   POST   /api/workspaces/:ws/sessions/:id/runs       {code, input?}
 //   POST   /api/workspaces/:ws/sessions/:id/drafts     {name, source, capabilities?, checks?}
 //   GET    /api/runs/:id                               {bound, keys}
+//   GET    /api/platform/agent                         {model, maxTokens, maxSteps, grant}
+//   *      /api/admin/...                              see admin.ts
 
 const MAX_BUNDLE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_QUOTA = 100;
@@ -73,9 +83,10 @@ const catalog = (env: Env) => env.CATALOG.getByName("catalog");
 
 export async function api(request: Request, env: Env, path: string[], caller: Caller): Promise<Response> {
   try {
+    if (path[0] === "admin") return await adminApi(request, env, path.slice(1), caller);
     return await route(request, env, path, caller);
   } catch (err) {
-    if (err instanceof ApiError) return json(err.status, { error: err.message });
+    if (err instanceof ApiError || err instanceof AdminError) return json(err.status, { error: err.message });
     throw err;
   }
 }
@@ -86,7 +97,7 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
   // Only a document's path may be longer.
   if (rest.length && !(collection === "workspaces" && b === "docs")) throw new ApiError(404, "not found");
   const admin = () => {
-    if (caller.kind !== "admin") throw new ApiError(403, "needs the admin token");
+    if (!isAdmin(caller)) throw new ApiError(403, "needs a platform admin");
   };
 
   // A turn may use only its own session, and read its workspace's docs.
@@ -99,6 +110,10 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
 
   if (collection === "version" && a === undefined && method === "GET") return json(200, { build: KERNEL_BUILD });
   if (collection === "whoami" && a === undefined && method === "GET") return json(200, caller);
+  if (collection === "platform" && a === "agent" && b === undefined && method === "GET") {
+    const { agent } = await platform(env).settings();
+    return json(200, { ...agent, grant: modelGrant(agent.model) });
+  }
   if (collection === "bundles" && a === undefined && method === "POST") {
     admin();
     return uploadBundle(request, env);
@@ -123,10 +138,21 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
     }
     if (b !== undefined && c === undefined && method === "PUT") {
       admin();
-      return publish(request, env, a, b);
+      return publish(request, env, a, b, caller);
     }
     if (b !== undefined && c === "publish" && d === undefined && method === "POST") {
       return publishDraft(env, a, b, caller);
+    }
+    if (b !== undefined && (c === "withdraw" || c === "restore") && d === undefined && method === "POST") {
+      admin();
+      if (!isVersion(b)) throw new ApiError(400, "invalid version");
+      const withdraw = c === "withdraw";
+      const version = await catalog(env).get(a, b);
+      if (!version) throw new ApiError(404, "blueprint version does not exist");
+      if (version.status === "draft") throw new ApiError(409, `${a} ${b} is a draft; only its author can use it`);
+      if (withdraw === (version.status === "withdrawn")) throw new ApiError(409, `${a} ${b} is ${withdraw ? "already withdrawn" : "not withdrawn"}`);
+      await adminEvent(env, caller, withdraw ? "blueprint.withdraw" : "blueprint.restore", { target: `${a}@${b}` });
+      return result(await catalog(env).setWithdrawn(a, b, withdraw, actorOf(caller)));
     }
   }
 
@@ -141,15 +167,19 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
     name(a);
     const ws = env.WORKSPACE.getByName(a);
     if (!(await ws.info())) throw new ApiError(404, `workspace ${a} does not exist`);
+    // Members read the docs, as does the agent in their turns; the
+    // workspace's admins write them.
+    const role = await roleIn(env, a, caller);
+    if (!role) throw new ApiError(403, `you are not a member of ${a}`);
     if (c === undefined && method === "GET") return json(200, { docs: await ws.listDocs() });
     const doc_ = docPath(path.slice(3));
+    if (method !== "GET" && role !== "admin") throw new ApiError(403, `only an admin of ${a} changes its docs`);
     if (method === "GET") {
       const doc = await ws.getDoc(doc_);
       if (doc === null) throw new ApiError(404, "document does not exist");
       return new Response(doc, { headers: { "content-type": "text/markdown; charset=utf-8" } });
     }
     if (method === "PUT") {
-      admin();
       const body = await request.arrayBuffer();
       if (body.byteLength > MAX_DOC_BYTES) throw new ApiError(413, "document larger than 256 KiB");
       let content: string;
@@ -158,10 +188,12 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
       } catch {
         throw new ApiError(400, "a document is UTF-8 text");
       }
+      await adminEvent(env, caller, "doc.put", { workspace: a, target: doc_, detail: { bytes: body.byteLength } });
       return result(await ws.putDoc(doc_, content));
     }
     if (method === "DELETE") {
-      admin();
+      if ((await ws.getDoc(doc_)) === null) throw new ApiError(404, "document does not exist");
+      await adminEvent(env, caller, "doc.delete", { workspace: a, target: doc_ });
       const r = await ws.deleteDoc(doc_);
       if (!r.ok) throw new ApiError(r.status, r.error);
       return new Response(null, { status: 204 });
@@ -170,40 +202,41 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
   }
 
   if (collection === "workspaces" && a === undefined && method === "GET") {
-    return json(200, { workspaces: await catalog(env).workspaces() });
+    // Platform admins see every workspace; a user the ones they belong to.
+    if (isAdmin(caller)) return json(200, { workspaces: await catalog(env).workspaces() });
+    const memberships = caller.kind === "user" ? await catalog(env).membershipsOf(caller.email) : [];
+    return json(200, { workspaces: memberships.map((m) => m.workspace), memberships });
   }
 
   if (collection === "workspaces" && a !== undefined) {
     name(a);
     const ws = env.WORKSPACE.getByName(a);
-    if (b === undefined && method === "PUT") {
-      admin();
-      const body = await readJson(request);
-      const quota = body.quota ?? DEFAULT_QUOTA;
-      if (!Number.isInteger(quota) || quota < 0) throw new ApiError(400, "quota must be a whole number");
-      const configured = await ws.configure(a, quota);
-      await catalog(env).rememberWorkspace(a);
-      return json(200, configured);
-    }
+    if (b === undefined && method === "PUT") return configureWorkspace(request, env, a, caller);
     const info = await ws.info();
     if (!info) throw new ApiError(404, `workspace ${a} does not exist`);
+    const role = await roleIn(env, a, caller);
     if (b === undefined && method === "GET") {
       // Workspaces configured before the catalog listed them are listed
       // once someone opens them.
       await catalog(env).rememberWorkspace(a);
-      return json(200, info);
+      return json(200, { ...info, role });
     }
+    if (b === "members") return members(request, env, a, caller, role, c, d);
     if (b === "usage" && c === undefined && method === "GET") {
-      // The admin token sees every cell; a user sees the cells they own.
+      // Admins see every cell; a user sees the cells they own.
       const month = new URL(request.url).searchParams.get("month") ?? new Date().toISOString().slice(0, 7);
       if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new ApiError(400, "month must be YYYY-MM");
-      return json(200, await ws.usage(month, caller.kind === "admin" ? undefined : caller.user));
+      const everyone = isAdmin(caller) || (role === "admin" && caller.kind === "user");
+      return json(200, await ws.usage(month, everyone || caller.kind === "admin" ? undefined : caller.user));
     }
     if (b === "cells" && c === undefined && method === "GET") {
       const cells = (await ws.listCells()).filter((cell) => canSee(caller, cell));
       return json(200, { cells });
     }
-    if (b === "cells" && c === undefined && method === "POST") return createCell(request, env, a, caller);
+    if (b === "cells" && c === undefined && method === "POST") {
+      if (caller.kind === "user" && !creates(role)) throw new ApiError(403, `only members of ${a} create cells in it`);
+      return createCell(request, env, a, caller);
+    }
     if (b === "sessions") return sessions(request, env, a, caller, c, d, e);
     if (b === "cells" && c !== undefined) {
       const cell = await ws.getCell(c);
@@ -217,7 +250,9 @@ async function route(request: Request, env: Env, path: string[], caller: Caller)
         return moveCell(request, env, a, cell);
       }
       if (d === undefined && method === "DELETE") {
-        owner();
+        // A platform admin may delete any cell, though not open it.
+        if (!owns(caller, cell) && !isAdmin(caller)) throw new ApiError(403, "only the cell's owner can do this");
+        if (!owns(caller, cell)) await adminEvent(env, caller, "cell.delete", { workspace: a, target: c, detail: { owner: cell.owner } });
         const result = await ws.deleteCell(c);
         if (!result.ok) throw new ApiError(result.status, result.error);
         return new Response(null, { status: 204 });
@@ -260,7 +295,7 @@ async function uploadBundle(request: Request, env: Env): Promise<Response> {
   return json(201, { digest });
 }
 
-async function publish(request: Request, env: Env, blueprint: string, version: string): Promise<Response> {
+async function publish(request: Request, env: Env, blueprint: string, version: string, caller: Caller): Promise<Response> {
   if (!isVersion(version)) throw new ApiError(400, "invalid version");
   const body = await readJson(request);
   if (!isDigest(body.bundle)) throw new ApiError(400, "bundle must be a SHA-256 digest");
@@ -273,6 +308,8 @@ async function publish(request: Request, env: Env, blueprint: string, version: s
   if (!(await env.BUNDLES.head(`sha256/${body.bundle}.js`))) {
     throw new ApiError(400, `bundle ${body.bundle} has not been uploaded`);
   }
+  if (await catalog(env).get(blueprint, version)) throw new ApiError(409, `${blueprint} ${version} is already published`);
+  await adminEvent(env, caller, "blueprint.publish", { target: `${blueprint}@${version}`, detail: { bundle: body.bundle, capabilities } });
   const result = await catalog(env).publish({ name: blueprint, version, bundle: body.bundle, capabilities, tier });
   if (!result.ok) throw new ApiError(409, `${blueprint} ${version} is already published`);
   return json(201, result.blueprint);
@@ -291,6 +328,7 @@ async function createCell(request: Request, env: Env, workspace: string, caller:
     body.version === undefined
       ? await catalog(env).latest(body.blueprint, viewer)
       : await catalog(env).get(body.blueprint, body.version);
+  if (blueprint?.status === "withdrawn") throw new ApiError(410, `${blueprint.name} ${blueprint.version} has been withdrawn`);
   if (!blueprint || !usable(blueprint, viewer)) throw new ApiError(404, "blueprint version does not exist");
   return result(await env.WORKSPACE.getByName(workspace).createCell(blueprint, owner), 201);
 }
@@ -299,6 +337,7 @@ async function moveCell(request: Request, env: Env, workspace: string, cell: Cel
   const body = await readJson(request);
   if (!isVersion(body.version)) throw new ApiError(400, "version is required");
   const blueprint = await catalog(env).get(cell.blueprint, body.version);
+  if (blueprint?.status === "withdrawn") throw new ApiError(410, `${blueprint.name} ${blueprint.version} has been withdrawn`);
   if (!blueprint || !usable(blueprint, { admin: false, user: cell.owner.user })) {
     throw new ApiError(404, "blueprint version does not exist");
   }
@@ -328,12 +367,118 @@ async function publishDraft(env: Env, blueprint: string, version: string, caller
 }
 
 function viewerOf(caller: Caller): Viewer {
-  return caller.kind === "admin" ? { admin: true } : { admin: false, user: caller.user };
+  return isAdmin(caller) || caller.kind === "admin" ? { admin: true } : { admin: false, user: caller.user };
 }
 
-// Whether a version may be used: a published one by anyone, a draft by its
-// author.
+function actorOf(caller: Caller): { user: string; email: string } {
+  return caller.kind === "admin" ? { user: "admin-token", email: "" } : { user: caller.user, email: caller.email };
+}
+
+// The caller's role in a workspace: a member's own; admin for a platform
+// admin or the admin token; a turn's owner's (and the turn is checked to
+// be in that workspace already); null for anyone else.
+async function roleIn(env: Env, workspace: string, caller: Caller): Promise<MemberRole | null> {
+  if (isAdmin(caller) || caller.kind === "admin") return "admin";
+  return env.WORKSPACE.getByName(workspace).role(caller.email);
+}
+
+// Whether a role may create cells and chats.
+const creates = (role: MemberRole | null) => role === "member" || role === "admin";
+
+// Creates a workspace (platform admins only) or changes its quota and
+// members (its admins too). The operator's admin token sets the quota on
+// every reconcile, so only a person's change is audited.
+async function configureWorkspace(request: Request, env: Env, workspace: string, caller: Caller): Promise<Response> {
+  const ws = env.WORKSPACE.getByName(workspace);
+  const info = await ws.info();
+  const role = info ? await roleIn(env, workspace, caller) : null;
+  if (!isAdmin(caller) && !(role === "admin" && caller.kind === "user")) {
+    throw new ApiError(403, info ? `only an admin of ${workspace} changes it` : "only a platform admin creates workspaces");
+  }
+  const body = await readJson(request);
+  const quota = body.quota;
+  if (quota !== undefined && (!Number.isInteger(quota) || quota < 0)) throw new ApiError(400, "quota must be a whole number");
+  const members = body.members === undefined ? {} : checkMembers(body.members);
+  if (caller.kind === "user" && !caller.platformAdmin && Object.hasOwn(members, caller.email) && members[caller.email] !== "admin") {
+    throw new ApiError(400, "you cannot take away your own admin role");
+  }
+  const changed = !info || (quota !== undefined && quota !== info.quota) || Object.keys(members).length > 0;
+  if (changed) {
+    await adminEvent(env, caller, info ? "workspace.update" : "workspace.create", {
+      workspace,
+      detail: { ...(quota !== undefined ? { quota } : {}), ...(Object.keys(members).length ? { members } : {}) },
+    });
+  }
+  let configured = await ws.configure(workspace, quota, DEFAULT_QUOTA);
+  await catalog(env).rememberWorkspace(workspace);
+  if (Object.keys(members).length) {
+    const r = await ws.setMembers(members, actorOf(caller).email || actorOf(caller).user);
+    if (!r.ok) throw new ApiError(r.status, r.error);
+    configured = (await ws.info())!;
+  }
+  return json(200, configured);
+}
+
+// A workspace's members: its members see who they are; its admins add,
+// change and remove them.
+async function members(
+  request: Request,
+  env: Env,
+  workspace: string,
+  caller: Caller,
+  role: MemberRole | null,
+  email: string | undefined,
+  rest: string | undefined,
+): Promise<Response> {
+  const method = request.method;
+  const ws = env.WORKSPACE.getByName(workspace);
+  if (rest !== undefined) throw new ApiError(404, "not found");
+  if (email === undefined && method === "GET") {
+    if (!role) throw new ApiError(403, `you are not a member of ${workspace}`);
+    return json(200, { members: await ws.members() });
+  }
+  if (email === undefined) throw new ApiError(404, "not found");
+  if (role !== "admin" || caller.kind === "turn") throw new ApiError(403, `only an admin of ${workspace} manages its members`);
+  const who = email.toLowerCase();
+  if (!who.includes("@")) throw new ApiError(400, "a member is an email address");
+  const self = caller.kind === "user" && !caller.platformAdmin && caller.email === who;
+  if (method === "PUT") {
+    const r = (await readJson(request)).role;
+    if (!MEMBER_ROLES.includes(r)) throw new ApiError(400, "role must be viewer, member or admin");
+    if (self && r !== "admin") throw new ApiError(400, "you cannot take away your own admin role");
+    await adminEvent(env, caller, "member.set", { workspace, target: who, detail: { role: r } });
+    const set = await ws.setMembers({ [who]: r }, actorOf(caller).email || actorOf(caller).user);
+    if (!set.ok) throw new ApiError(set.status, set.error);
+    return json(200, set.value.find((m) => m.email === who));
+  }
+  if (method === "DELETE") {
+    if (self) throw new ApiError(400, "you cannot remove yourself");
+    if ((await ws.role(who)) === null) throw new ApiError(404, `${who} is not a member`);
+    await adminEvent(env, caller, "member.remove", { workspace, target: who });
+    const r = await ws.removeMember(who);
+    if (!r.ok) throw new ApiError(r.status, r.error);
+    return new Response(null, { status: 204 });
+  }
+  throw new ApiError(404, "not found");
+}
+
+function checkMembers(value: unknown): Record<string, MemberRole> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiError(400, "members must be {email: role}");
+  const entries = Object.entries(value);
+  if (entries.length > 1000) throw new ApiError(400, "at most 1000 members at once");
+  return Object.fromEntries(
+    entries.map(([email, role]) => {
+      if (!email.includes("@") || email.length > 254) throw new ApiError(400, "a member is an email address");
+      if (!MEMBER_ROLES.includes(role as MemberRole)) throw new ApiError(400, "role must be viewer, member or admin");
+      return [email.toLowerCase(), role as MemberRole];
+    }),
+  );
+}
+
+// Whether a new cell may use a version, or a cell move to it: a published
+// one by anyone, a draft by its author, a withdrawn one by no one.
 function usable(b: { status?: string; author?: { user: string } }, viewer: Viewer): boolean {
+  if (b.status === "withdrawn") return false;
   return viewer.admin || b.status !== "draft" || b.author?.user === viewer.user;
 }
 
@@ -376,8 +521,12 @@ async function sessions(
     if (method === "POST") {
       const body = await readJson(request);
       const owner = ownerOf(caller, body);
+      if (caller.kind === "user" && !creates(await roleIn(env, workspace, caller))) {
+        throw new ApiError(403, `only members of ${workspace} start chats in it`);
+      }
       const title = body.title === undefined ? DEFAULT_SESSION_TITLE : sessionTitle(body.title);
-      const grants = body.grants ?? [];
+      // Named grants, or what the platform gives new chats.
+      const grants = body.grants ?? defaultSessionGrants(await platform(env).settings());
       checkGrants(grants);
       const created = await ws.createSession(owner, title, grants);
       if (!created.ok) throw new ApiError(created.status, created.error);
@@ -418,6 +567,14 @@ async function sessions(
   if (sub === "turns" && arg === undefined && method === "POST") {
     const content = (await readJson(request)).content;
     if (typeof content !== "string" || !content.trim()) throw new ApiError(400, "content is required");
+    // A chat works in its workspace for as long as its owner belongs to it.
+    if (caller.kind === "user" && !creates(await ws.role(info.owner.email)) && !isAdmin(caller)) {
+      throw new ApiError(403, `you are no longer a member of ${workspace}`);
+    }
+    // The agent thinks with the platform's model: the owner who starts a
+    // turn lets the chat use it.
+    const { agent } = await platform(env).settings();
+    await session.addGrant(modelGrant(agent.model));
     const started = sessionResult(await session.startTurn(content));
     if (info.title === DEFAULT_SESSION_TITLE) {
       const title = content.trim().replace(/\s+/g, " ").slice(0, 60);
@@ -433,7 +590,7 @@ async function sessions(
       email: owner.email,
       expiresAt: started.turn.expiresAt,
     });
-    return json(201, { turn: { ...started.turn, token }, session: started.view });
+    return json(201, { turn: { ...started.turn, token }, session: started.view, agent });
   }
   if (sub === "turns" && arg !== undefined && method === "DELETE") {
     if (caller.kind === "turn" && caller.turn !== arg) throw new ApiError(403, "a turn token can end only its own turn");
@@ -578,8 +735,11 @@ function owns(caller: Caller, cell: CellRecord): boolean {
   return caller.kind === "admin" || caller.user === cell.owner.user;
 }
 
+// Who sees a cell through the API: its owner, those it is shared with, and
+// platform admins. Opening it is the cell's own check, which admins do not
+// pass.
 function canSee(caller: Caller, cell: CellRecord): boolean {
-  return owns(caller, cell) || (caller.kind === "user" && Object.hasOwn(cell.shares, caller.email));
+  return owns(caller, cell) || isAdmin(caller) || (caller.kind === "user" && Object.hasOwn(cell.shares, caller.email));
 }
 
 function name(value: unknown): asserts value is string {

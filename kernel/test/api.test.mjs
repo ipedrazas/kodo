@@ -53,7 +53,7 @@ describe("blueprints", () => {
 
 describe("workspaces and cells", () => {
   before(async () => {
-    await kernel.api("PUT", "/workspaces/team", { quota: 100 });
+    await kernel.workspace("team", { quota: 100 });
     await kernel.publish("examples/notes.js", "notes", "1.0.0");
     await kernel.publish("test/gadgets/fixture.js", "multi", "1");
   });
@@ -99,7 +99,7 @@ describe("workspaces and cells", () => {
   });
 
   test("the quota caps a workspace's cells, and deleting frees room", async () => {
-    await kernel.api("PUT", "/workspaces/small", { quota: 2 });
+    await kernel.workspace("small", { quota: 2 });
     const a = await kernel.createCell("small", "notes");
     await kernel.createCell("small", "notes");
     const over = await kernel.api("POST", "/workspaces/small/cells", { blueprint: "notes" }, { as: "alice" });
@@ -117,7 +117,7 @@ describe("workspaces and cells", () => {
   });
 
   test("a workspace cannot see or delete another workspace's cells", async () => {
-    await kernel.api("PUT", "/workspaces/other", {});
+    await kernel.workspace("other", {});
     const cell = await kernel.createCell("team", "notes");
     assert.equal((await kernel.api("GET", `/workspaces/other/cells/${cell.id}`)).status, 404);
     assert.equal((await kernel.api("DELETE", `/workspaces/other/cells/${cell.id}`)).status, 404);
@@ -136,7 +136,7 @@ describe("the gadget API", () => {
   let cell;
 
   before(async () => {
-    await kernel.api("PUT", "/workspaces/sample", {});
+    await kernel.workspace("sample", {});
     await kernel.publish("examples/notes.js", "sample-notes", "1.0.0");
     cell = (await kernel.createCell("sample", "sample-notes")).id;
   });

@@ -7,6 +7,19 @@ import type { SessionInfo } from "./session";
 
 export type ShareRole = "viewer" | "editor";
 
+// A member's role in a workspace: a viewer sees it, a member also creates
+// cells and chats in it, and an admin also manages its members, quota and
+// docs.
+export type MemberRole = "viewer" | "member" | "admin";
+export const MEMBER_ROLES: readonly MemberRole[] = ["viewer", "member", "admin"];
+
+export interface Member {
+  email: string;
+  role: MemberRole;
+  addedAt: number;
+  addedBy: string;
+}
+
 export interface Owner {
   user: string;
   email: string;
@@ -29,6 +42,7 @@ export interface WorkspaceInfo {
   name: string;
   quota: number;
   cells: number;
+  members: number;
 }
 
 // One of the workspace's markdown documents (skills, knowledge), which the
@@ -128,18 +142,100 @@ export class Workspace extends DurableObject<Env> {
       content TEXT NOT NULL,
       updated_at INTEGER NOT NULL
     )`);
+    // Added in Phase 12: members, by email, as shares are.
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS members (
+      email TEXT PRIMARY KEY,
+      role TEXT NOT NULL,
+      added_at INTEGER NOT NULL,
+      added_by TEXT NOT NULL
+    )`);
+    // A workspace from before membership keeps working for the people who
+    // use it: everyone who owns a cell or a chat in it becomes a member.
+    if (!ctx.storage.kv.get("members-migrated")) {
+      const now = Date.now();
+      for (const table of ["cells", "sessions"]) {
+        ctx.storage.sql.exec(
+          `INSERT OR IGNORE INTO members SELECT DISTINCT owner_email, 'member', ?, 'migration' FROM ${table} WHERE owner_email != ''`,
+          now,
+        );
+      }
+      ctx.storage.kv.put("members-migrated", true);
+      if (this.info()) ctx.blockConcurrencyWhile(() => this.syncMembers());
+    }
   }
 
-  configure(name: string, quota: number): WorkspaceInfo {
+  // Creates the workspace, or changes its quota. A quota left out keeps the
+  // current one, or is `fallback` for a new workspace.
+  configure(name: string, quota: number | undefined, fallback: number): WorkspaceInfo {
     this.ctx.storage.kv.put("name", name);
-    this.ctx.storage.kv.put("quota", quota);
+    const current = this.ctx.storage.kv.get<number>("quota");
+    this.ctx.storage.kv.put("quota", quota ?? current ?? fallback);
     return this.info()!;
   }
 
   info(): WorkspaceInfo | null {
     const name = this.ctx.storage.kv.get<string>("name");
     if (name === undefined) return null;
-    return { name, quota: this.ctx.storage.kv.get<number>("quota") ?? 0, cells: this.count() };
+    const members = this.ctx.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM members").one().n;
+    return { name, quota: this.ctx.storage.kv.get<number>("quota") ?? 0, cells: this.count(), members };
+  }
+
+  members(): Member[] {
+    return this.ctx.storage.sql
+      .exec<{ email: string; role: MemberRole; added_at: number; added_by: string }>(
+        "SELECT * FROM members ORDER BY email",
+      )
+      .toArray()
+      .map((r) => ({ email: r.email, role: r.role, addedAt: r.added_at, addedBy: r.added_by }));
+  }
+
+  // The role of the user with this email, or null if they are not a member.
+  role(email: string): MemberRole | null {
+    if (!email) return null;
+    return (
+      this.ctx.storage.sql.exec<{ role: MemberRole }>("SELECT role FROM members WHERE email = ?", email).toArray()[0]
+        ?.role ?? null
+    );
+  }
+
+  // Adds members or changes their roles.
+  async setMembers(members: Record<string, MemberRole>, by: string): Promise<WorkspaceResult<Member[]>> {
+    if (!this.info()) return fail(404, "workspace does not exist");
+    const now = Date.now();
+    for (const [email, role] of Object.entries(members)) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO members VALUES (?, ?, ?, ?)
+         ON CONFLICT (email) DO UPDATE SET role = excluded.role`,
+        email,
+        role,
+        now,
+        by,
+      );
+    }
+    await this.syncMembers();
+    return { ok: true, value: this.members() };
+  }
+
+  // Removes a member. Their cells and chats stay theirs; they can no longer
+  // create others here.
+  async removeMember(email: string): Promise<WorkspaceResult<null>> {
+    if (this.role(email) === null) return fail(404, `${email} is not a member`);
+    this.ctx.storage.sql.exec("DELETE FROM members WHERE email = ?", email);
+    await this.syncMembers();
+    return { ok: true, value: null };
+  }
+
+  // The catalog keeps who belongs to which workspace, so a user can list
+  // theirs without asking every workspace.
+  private async syncMembers(): Promise<void> {
+    const name = this.info()?.name;
+    if (!name) return;
+    const members = Object.fromEntries(this.members().map((m) => [m.email, m.role]));
+    try {
+      await this.env.CATALOG.getByName("catalog").setMemberships(name, members);
+    } catch (err) {
+      console.log(`workspace ${name}: listing its members in the catalog failed: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   async createCell(blueprint: BlueprintVersion, owner: Owner): Promise<WorkspaceResult<CellRecord>> {

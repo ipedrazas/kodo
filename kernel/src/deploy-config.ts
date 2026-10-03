@@ -9,4 +9,7 @@ export const DEPLOY_CONFIG = {
   gatekeeperUrl: "",
   gatekeeperKey: "",
   fleet: "",
+  adminGroup: "",
+  adminGroupsClaim: "",
+  adminEmails: "",
 };

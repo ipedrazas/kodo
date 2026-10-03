@@ -49,8 +49,8 @@ before(async () => {
       AGENT_RUN_CALLS: String(RUN_CALLS),
     },
   });
-  await kernel.api("PUT", "/workspaces/team", { quota: 100 });
-  await kernel.api("PUT", "/workspaces/other", { quota: 100 });
+  await kernel.workspace("team", { quota: 100 });
+  await kernel.workspace("other", { quota: 100 });
 });
 
 after(async () => {

@@ -8,7 +8,7 @@ let kernel;
 
 before(async () => {
   kernel = await startKernel();
-  await kernel.api("PUT", "/workspaces/team", { quota: 100 });
+  await kernel.workspace("team", { quota: 100 });
   await kernel.publish("test/gadgets/fixture.js", "fixture", "1");
 });
 

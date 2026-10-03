@@ -39,7 +39,7 @@ let kernel;
 
 before(async () => {
   kernel = await startKernel({ gatekeeper: true });
-  await kernel.api("PUT", "/workspaces/team", { quota: 100 });
+  await kernel.workspace("team", { quota: 100 });
   await kernel.publish("examples/notes.js", "notes", "1.0.0");
 });
 

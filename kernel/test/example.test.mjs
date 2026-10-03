@@ -24,7 +24,7 @@ const github = (call) => {
 
 before(async () => {
   kernel = await startKernel({ gatekeeper: github });
-  await kernel.api("PUT", "/workspaces/examples", {});
+  await kernel.workspace("examples", {});
   const fs = await import("node:fs/promises");
   const source = await fs.readFile(new URL("../../examples/repo-viewer/gadget.js", import.meta.url));
   const digest = (await kernel.api("POST", "/bundles", source)).body.digest;
