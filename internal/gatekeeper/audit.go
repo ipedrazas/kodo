@@ -56,6 +56,10 @@ type Record struct {
 	// and the capabilities it declares. Cell is then the agent session.
 	Bundle       string   `json:"bundle,omitempty"`
 	Capabilities []string `json:"capabilities,omitempty"`
+	// For an admin's action: what they did, to what, and how.
+	Action string `json:"action,omitempty"`
+	Target string `json:"target,omitempty"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // Audit appends records to audit/<yyyy>/<mm>/<dd>/ in the store, one object

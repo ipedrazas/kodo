@@ -38,7 +38,7 @@ function gateway(call) {
 
 before(async () => {
   kernel = await startKernel({ gatekeeper: gateway });
-  await kernel.api("PUT", "/workspaces/team", {});
+  await kernel.workspace("team", {});
   const source = await readFile(new URL("../../examples/ask/gadget.js", import.meta.url));
   const digest = (await kernel.api("POST", "/bundles", source)).body.digest;
   const res = await kernel.api("PUT", "/blueprints/ask/1.0.0", { bundle: digest, capabilities: ["inference:model/*:invoke"] });

@@ -6,7 +6,7 @@ The LAN environment: cert-manager, Envoy Gateway, Dex and the operator-managed `
 | --- | --- |
 | Gateway | Envoy Gateway, namespace `kodo-gateway`, MetalLB address **192.168.2.224** |
 | Certificate | Let's Encrypt via Cloudflare DNS-01: `app`, `auth` and `*.g.hiddenfield.dev`, renewed by cert-manager |
-| Identity provider | Dex at `https://auth.hiddenfield.dev`, namespace `kodo-auth`, users `alice` and `bob` |
+| Identity provider | Dex at `https://auth.hiddenfield.dev`, namespace `kodo-auth`, users `alice` and `bob`, and `carol`, the platform admin |
 | Fleet | `Fleet/kodo` in namespace `kodo`, bucket `kodo-dev`, default-deny egress |
 | Gatekeeper | `kodo-gatekeeper` in `kodo-system`, bucket `kodo-dev-gatekeeper`, OpenBao at `openbao.alacasa.uk`; users connect accounts at `app.hiddenfield.dev/gatekeeper/` |
 | Login | `SecurityPolicy/kodo-login`: OIDC with Dex, one session cookie on `.hiddenfield.dev` |
@@ -24,8 +24,10 @@ task k3s:up KERNEL_IMAGE=ghcr.io/ipedrazas/kodo-kernel:main OPERATOR_IMAGE=ghcr.
 task k3s:identity-test
 task k3s:gatekeeper-test        # Phase 7: grants, the Gatekeeper, egress, the vault and audit
 task k3s:approvals-test         # Phase 8: the approval queue; restarts the Gatekeeper twice
-task k3s:inference-test         # Phase 9: models through grants, routing, budgets and usage
+task k3s:inference-test         # Phase 9: models through grants, routing, budgets (now the kernel's) and usage
 task k3s:agent-test             # Phase 10: the agent's code in ephemeral cells; restarts the agent twice
+task k3s:authoring-test         # Phase 11: the agent writes gadgets; the author publishes them
+task k3s:admin-test             # Phase 12: admins, membership, settings, withdrawal, suspension, audit
 ```
 
 ## Bucket keys
@@ -43,7 +45,7 @@ They are Tigris IAM policies on access keys, so a fleet's credentials cannot lis
 
 The fleet's nodes can open connections only to DNS, each other, the Gatekeeper (8081 for calls, 8082 for the egress proxy) and Dex's keys. Tigris's addresses change with DNS, so the nodes reach the bucket through the Gatekeeper's egress proxy (`HTTPS_PROXY`), which tunnels only to `t3.storage.dev` and `*.t3.storage.dev`. Anything else, GitHub and the model providers included, is refused. Models are reached only through the Gatekeeper, which is the only client the inference gateway admits.
 
-`k3s:up` creates `.auth.env` (git-ignored) with the Dex client secret and the test users' passwords on first run. Log in as `alice@hiddenfield.dev` or `bob@hiddenfield.dev` with those passwords.
+`k3s:up` creates `.auth.env` (git-ignored) with the Dex client secret and the test users' passwords on first run. Log in as `alice@hiddenfield.dev` or `bob@hiddenfield.dev` with those passwords, or as `carol@hiddenfield.dev`, the platform admin, for `https://app.hiddenfield.dev/admin/`. An `.auth.env` from before Phase 12 gets carol's password the next time `k3s:up` runs `deploy/k3s/auth-secrets.sh`; run it and apply `dex.yaml` to add her alone.
 
 ## DNS
 

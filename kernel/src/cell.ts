@@ -11,6 +11,7 @@ import {
   gatekeeper,
 } from "./host";
 import { CALLER_HEADER, CELL_HEADER, sha256Hex, text } from "./http";
+import { platformView } from "./platform";
 import { runnerDigest } from "./runner";
 import type { Caller } from "./identity";
 import type { Owner, ShareRole } from "./workspace";
@@ -263,6 +264,11 @@ export class Cell extends DurableObject<Env> {
   async callContext(): Promise<CallCheck | null> {
     const binding = this.binding();
     if (!binding) return null;
+    // A suspended owner's cells, and their chats' runs, make no calls with
+    // their connections or budget, whatever the gadget's alarms do.
+    if ((await platformView(this.env)).suspended.has(binding.owner.user)) {
+      return { refused: "the cell's owner is suspended", status: 403 };
+    }
     if (binding.run) {
       const run = { ...binding.run, calls: binding.run.calls + 1 };
       this.ctx.storage.kv.put("binding", { ...binding, run });

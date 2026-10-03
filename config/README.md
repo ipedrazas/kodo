@@ -42,6 +42,12 @@ spec:
     issuer: https://auth.example.com
     audience: kodo                        # the OIDC client id the gateway uses
     jwksURL: http://dex.auth.svc:5556/keys  # optional; defaults to <issuer>/keys
+  admins:                                 # optional; the platform admins, at app.<domain>/admin/
+    group: kodo-admins                    # an IdP group
+    groupsClaim: groups                   # the ID token claim listing groups (default)
+    emails: [ops@example.com]             # bootstrap emails, for IdPs without groups
+  inference: {}                           # optional; report the inference gateway to the dashboard
+    # namespace: kodo-inference
   gatekeeper: {}                          # optional; the defaults are:
     # namespace: kodo-system
     # service: kodo-gatekeeper
@@ -52,7 +58,8 @@ spec:
 ```
 
 - **Admin token**: the operator creates `<fleet>-admin-token` (key `token`) once and deploys the kernel with its hash. It calls the kernel API with it, and so can anyone who can read the Secret.
-- **Identity settings** go to the kernel at deploy time, so changing `auth` runs a new deploy Job.
+- **Identity settings** go to the kernel at deploy time, so changing `auth` or `admins` runs a new deploy Job.
+- **Cluster report**: every minute the operator sends each Fleet's kernel (`PUT /api/admin/cluster`, with the admin token) the Fleet's status and its node pods and, with `inference` set, the models of the AIGatewayRoutes and the rate limits of the BackendTrafficPolicies in that namespace, which it may only read. Fleet pods cannot reach the Kubernetes API; this is how the admin dashboard shows cluster configuration.
 
 - **Kernel changes** start a new deploy Job for the new image. Nodes adopt the new kernel in place within one pointer poll (30 s), with no restart and no failed requests. `status.kernel` shows the last image that deployed successfully.
 - **celld changes** stop the fleet: mixed celld versions cannot share a fleet, so the operator scales the StatefulSet to zero on the old image, waits until every node pod is gone, then starts the new image. The fleet serves nothing in between: about 20 s on kind and 36 s on the k3s cluster under gVisor. The `Upgrading` condition is true until every node runs the new image.

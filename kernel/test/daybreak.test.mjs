@@ -11,7 +11,7 @@ let cell;
 
 before(async () => {
   kernel = await startKernel();
-  await kernel.api("PUT", "/workspaces/friends", {});
+  await kernel.workspace("friends", {});
   const source = await readFile(new URL("../../examples/daybreak/gadget.js", import.meta.url));
   const digest = (await kernel.api("POST", "/bundles", source)).body.digest;
   assert.equal((await kernel.api("PUT", "/blueprints/daybreak/1.0.0", { bundle: digest })).status, 201);

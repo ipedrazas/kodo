@@ -1,6 +1,7 @@
 # The agent for hiddenfield.dev: the chat at app.hiddenfield.dev/chat/,
-# calling the kodo fleet's kernel, thinking with the model "agent" (deploy/
-# inference/models.yaml). task k3s:agent applies it.
+# calling the kodo fleet's kernel. Which model it thinks with (by default
+# "agent", deploy/inference/models.yaml) and its limits are set at
+# app.hiddenfield.dev/admin/. task k3s:agent applies it.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: kodo-system
@@ -10,5 +11,3 @@ configMapGenerator:
   - name: kodo-agent
     literals:
       - KERNEL_URL=http://kodo.kodo.svc
-      - AGENT_MODEL=agent
-      - AGENT_MAX_TOKENS=16384

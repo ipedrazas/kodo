@@ -101,6 +101,9 @@ func kernelJobName(f *kodov1.Fleet) string {
 	if g := gatekeeper(f); g != nil {
 		key += "|" + gatekeeperURL(g)
 	}
+	if a := f.Spec.Admins; a != nil {
+		key += "|" + a.Group + "|" + a.GroupsClaim + "|" + strings.Join(a.Emails, ",")
+	}
 	sum := sha256.Sum256([]byte(key))
 	return f.Name + "-kernel-" + hex.EncodeToString(sum[:])[:10]
 }
@@ -160,6 +163,13 @@ func kernelAuthEnv(f *kodov1.Fleet) []corev1.EnvVar {
 			corev1.EnvVar{Name: "OIDC_ISSUER", Value: a.Issuer},
 			corev1.EnvVar{Name: "OIDC_AUDIENCE", Value: a.Audience},
 			corev1.EnvVar{Name: "OIDC_JWKS_URL", Value: jwks},
+		)
+	}
+	if a := f.Spec.Admins; a != nil {
+		env = append(env,
+			corev1.EnvVar{Name: "PLATFORM_ADMIN_GROUP", Value: a.Group},
+			corev1.EnvVar{Name: "PLATFORM_ADMIN_GROUPS_CLAIM", Value: a.GroupsClaim},
+			corev1.EnvVar{Name: "PLATFORM_ADMIN_EMAILS", Value: strings.Join(a.Emails, ",")},
 		)
 	}
 	if g := gatekeeper(f); g != nil {

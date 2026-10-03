@@ -53,6 +53,18 @@ type FleetSpec struct {
 	// +optional
 	Auth *AuthSpec `json:"auth,omitempty"`
 
+	// Admins names the platform admins, who administer the fleet through
+	// their own login at app.<domain>/admin/: settings, budgets, workspaces,
+	// Blueprints, users and the audit log.
+	// +optional
+	Admins *AdminsSpec `json:"admins,omitempty"`
+
+	// Inference locates the inference gateway's configuration, which the
+	// operator reports to the kernel each minute so the admin dashboard
+	// shows the models, their backends and the rate limits as configured.
+	// +optional
+	Inference *InferenceRef `json:"inference,omitempty"`
+
 	// Gatekeeper connects the kernel to a Gatekeeper, which makes the external
 	// calls gadgets are granted. The operator gives the fleet a signing key
 	// and adds it to the Gatekeeper's trusted fleets. Without it, capability
@@ -97,6 +109,30 @@ type EgressSpec struct {
 	// Allow are extra egress rules, in NetworkPolicy form.
 	// +optional
 	Allow []networkingv1.NetworkPolicyEgressRule `json:"allow,omitempty"`
+}
+
+// AdminsSpec says who the platform admins are: members of an IdP group, and
+// a bootstrap list of emails for IdPs without groups.
+type AdminsSpec struct {
+	// Group is the IdP group whose members are platform admins.
+	// +optional
+	Group string `json:"group,omitempty"`
+	// GroupsClaim is the ID token claim that lists the user's groups.
+	// +kubebuilder:default=groups
+	// +optional
+	GroupsClaim string `json:"groupsClaim,omitempty"`
+	// Emails are platform admins by email, if the IdP has not said the
+	// email is unverified.
+	// +optional
+	Emails []string `json:"emails,omitempty"`
+}
+
+// InferenceRef is where the inference gateway's resources are.
+type InferenceRef struct {
+	// Namespace of the AIGatewayRoutes and BackendTrafficPolicies.
+	// +kubebuilder:default=kodo-inference
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // AuthSpec configures how the kernel verifies callers.

@@ -1,6 +1,7 @@
 import type { Catalog } from "./catalog";
 import type { Cell } from "./cell";
 import type { Keys } from "./host";
+import type { Platform } from "./platform";
 import type { Session } from "./session";
 import type { Workspace } from "./workspace";
 
@@ -12,6 +13,7 @@ export interface Env {
   WORKSPACE: DurableObjectNamespace<Workspace>;
   KEYS: DurableObjectNamespace<Keys>;
   SESSION: DurableObjectNamespace<Session>;
+  PLATFORM: DurableObjectNamespace<Platform>;
   GADGET_CALL_TIMEOUT_MS: string;
   GADGET_CPU_MS: string;
   // Limits on each run of the agent's code; see wrangler.jsonc.
@@ -23,6 +25,10 @@ export interface Env {
   OIDC_AUDIENCE?: string;
   OIDC_JWKS_URL?: string;
   ADMIN_TOKEN_SHA256?: string;
+  PLATFORM_ADMIN_GROUP?: string;
+  PLATFORM_ADMIN_GROUPS_CLAIM?: string;
+  // Comma-separated.
+  PLATFORM_ADMIN_EMAILS?: string;
   // Gatekeeper settings; see config.ts. Normally set at deploy time instead.
   GATEKEEPER_URL?: string;
   GATEKEEPER_KEY?: string;

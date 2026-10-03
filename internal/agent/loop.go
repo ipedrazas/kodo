@@ -10,15 +10,34 @@ import (
 	"time"
 )
 
-// Config is how the agent works.
+// Config is how the agent works. Platform admins set it in the kernel, which
+// returns it with every turn it starts, so a change applies to the next turn.
 type Config struct {
 	// The model the agent thinks with: a session needs the grant
-	// inference:model/<Model>:invoke, which new sessions get.
-	Model string
+	// inference:model/<Model>:invoke, which the kernel gives it.
+	Model string `json:"model"`
 	// Model calls per turn, at most.
-	MaxSteps int
+	MaxSteps int `json:"maxSteps"`
 	// max_tokens of each model call.
-	MaxTokens int
+	MaxTokens int `json:"maxTokens"`
+}
+
+// DefaultConfig is what the agent uses with a kernel that does not say:
+// the kernel's own defaults.
+var DefaultConfig = Config{Model: "agent", MaxSteps: 10, MaxTokens: 16384}
+
+// orDefault fills in what a kernel left out.
+func (c Config) orDefault() Config {
+	if c.Model == "" {
+		c.Model = DefaultConfig.Model
+	}
+	if c.MaxSteps <= 0 {
+		c.MaxSteps = DefaultConfig.MaxSteps
+	}
+	if c.MaxTokens <= 0 {
+		c.MaxTokens = DefaultConfig.MaxTokens
+	}
+	return c
 }
 
 // What goes to the model from the transcript: the latest messages, and of
@@ -159,7 +178,7 @@ func (t *turn) ask(ctx context.Context) (reply, error) {
 		// A tool call cut off this way is usually dropped whole: most often
 		// a gadget longer than one answer may be.
 		if r.CutOff {
-			return reply{}, say("My answer was longer than the %d tokens I may write at once, so it was cut off. If I was writing a gadget, ask for a smaller one, or raise AGENT_MAX_TOKENS.", t.config.MaxTokens)
+			return reply{}, say("My answer was longer than the %d tokens I may write at once, so it was cut off. If I was writing a gadget, ask for a smaller one, or ask a platform admin to raise my output limit at %s/admin/.", t.config.MaxTokens, t.app)
 		}
 		return reply{}, say("My model answered with nothing.")
 	}
@@ -184,6 +203,9 @@ func modelRefusal(status int, body []byte, model, app string) error {
 	}
 	switch status {
 	case http.StatusTooManyRequests:
+		if strings.Contains(detail, "budget") {
+			return say("I cannot think: %s. A platform admin can raise it.", detail)
+		}
 		return say("Your model budget, or the workspace's, is used up for now, so I cannot think. Try again later.")
 	case http.StatusForbidden:
 		return say("This chat cannot use my model: grant it %s in the chat's settings at %s/chat/ (%s).", modelCapability(model), app, detail)

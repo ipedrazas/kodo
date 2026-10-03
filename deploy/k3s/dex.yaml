@@ -1,5 +1,5 @@
-# Dex as the LAN identity provider, at https://auth.hiddenfield.dev, with two
-# static test users. The dex-secrets Secret (created by `task auth:secrets`)
+# Dex as the LAN identity provider, at https://auth.hiddenfield.dev, with
+# three static test users; carol is a platform admin (fleet.yaml). The dex-secrets Secret (created by `task auth:secrets`)
 # holds the client secret and the users' password hashes.
 apiVersion: v1
 kind: Namespace
@@ -40,6 +40,10 @@ data:
         username: bob
         userID: 9a4e6c2d-bob
         hashFromEnv: BOB_PASSWORD_HASH
+      - email: carol@hiddenfield.dev
+        username: carol
+        userID: 5b8c1e7f-carol
+        hashFromEnv: CAROL_PASSWORD_HASH
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -57,7 +61,7 @@ spec:
         app: dex
       annotations:
         # Changes when the config does, so Dex restarts to read it.
-        kodo.dev/config-version: "1"
+        kodo.dev/config-version: "2"
     spec:
       automountServiceAccountToken: false
       containers:

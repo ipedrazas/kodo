@@ -326,7 +326,25 @@ The agent produces a gadget bundle; the kernel stores it by digest and creates a
 
 ---
 
-## Phase 12: Administration
+## Phase 12: Administration (done)
+
+In [#21](https://github.com/ipedrazas/kodo/pull/21), verified on the k3s cluster by `test/e2e/admin.sh` (`task k3s:admin-test`) against the real gateway, Dex, operator, fleet, agent, Gatekeeper and inference gateway; also tested under `celld dev` (`kernel/test/admin.test.mjs`) and in Go (`internal/gatekeeper/audit_query_test.go`, `internal/controller/report_test.go`, `internal/agent`). See [kernel/README.md](../kernel/README.md#roles). Decisions:
+
+- **Budgets move into the product.** Monthly token budgets per user and per workspace, with overrides that raise or lower one, live in a fleet-wide `Platform` Durable Object. Every model call (a gadget's, a chat's, a run's) asks it before the call and adds its tokens after; a call over budget is a 429 that never reaches the Gatekeeper. The inference gateway keeps only 60 calls a minute per user, as cluster protection. Spend is counted from the Phase 12 deploy on; earlier calls this month are in the cells' usage, not the budgets.
+- **The operator reports the cluster.** Fleet pods cannot read the Kubernetes API, so every minute the operator sends each kernel the Fleet's status and node pods and, with `Fleet.spec.inference`, the AIGatewayRoutes' models and the BackendTrafficPolicies' rate limits, which it may only read. The dashboard shows them read-only.
+- **Existing owners become members.** A workspace from before membership makes everyone who owns a cell or a chat in it a member, on first open. Only platform admins create workspaces. Members are kept by email, and an email the IdP says is unverified counts for nothing; a bootstrap admin email must be marked verified.
+- `Fleet.spec.admins` names an IdP group (and its claim) and bootstrap emails; on k3s, carol, a third Dex user, is the platform admin. A turn token never carries the role.
+- A platform admin can do through their login everything the admin token did for a person, except publish someone else's draft. They see every cell and may delete one, but cannot open, grant or share it.
+- Every action a person takes as an admin is an `admin` event in the Gatekeeper's audit log before it takes effect, and does not happen if it cannot be recorded. The admin token's changes are the operator's (GitOps) and are not. The Gatekeeper searches the audit log for a fleet's own records (`POST /v1/audit/query`, up to 31 days, at most 5000 records read per search).
+- A suspended user is refused by the router everywhere, and their cells and runs make no capability calls; each isolate reads the suspended list at most every 5 s. A member removed from a workspace keeps their cells but starts no turns, runs or model calls there.
+- The agent reads only `KERNEL_URL`: the kernel returns the agent's model, output limit and steps with every turn, and starting a turn grants the chat the current model.
+
+Findings:
+
+- A security review before deploying found three gaps, fixed in the PR: a suspended owner's cells could still call out from an alarm, a removed member's chat could still run code without a turn, and an unverified email carried workspace roles.
+- Switching the agent to the simulator on k3s took effect on the next turn with no restart, but the simulator refuses the agent's tool schema (400 `Tool validation failed`), so it is no model to chat with.
+- macOS bash 3.2 brace-expanding JSON inside `"$(...)"` broke the e2e script again; bodies are built in variables first.
+- A workspace admin may set their workspace's quota to anything, as the plan said; a platform cap would be a small addition.
 
 **User stories**: an administrator role; platform settings managed in the product, not in env vars; one dashboard for the fleet.
 
@@ -342,14 +360,14 @@ An admin dashboard at `app.<domain>/admin/` brings together the fleet (celld nod
 
 ### Acceptance criteria
 
-- [ ] A user in the configured IdP group is a platform admin; anyone else gets 403 on every admin endpoint and page
-- [ ] A workspace admin manages members, quota and docs of their workspace and nothing beyond it; a non-member cannot create cells or chats there
-- [ ] Changing the agent's output limit or model in the dashboard applies to the next turn without a restart, and no agent setting is read from the environment except where to find the kernel
-- [ ] A withdrawn Blueprint version cannot be instantiated; existing cells keep running until their owners move them
-- [ ] A suspended user's requests and turns are refused, and their cells are not served to them
-- [ ] The dashboard shows model routes and budgets as they are configured in the cluster, with usage per user and workspace against them
-- [ ] Every admin action is in the audit log with who did it, and the audit log is searchable from the dashboard
-- [ ] Everything the admin token could do for a person can be done by a platform admin through their own login
+- [x] A user in the configured IdP group is a platform admin; anyone else gets 403 on every admin endpoint and page
+- [x] A workspace admin manages members, quota and docs of their workspace and nothing beyond it; a non-member cannot create cells or chats there
+- [x] Changing the agent's output limit or model in the dashboard applies to the next turn without a restart, and no agent setting is read from the environment except where to find the kernel
+- [x] A withdrawn Blueprint version cannot be instantiated; existing cells keep running until their owners move them
+- [x] A suspended user's requests and turns are refused, and their cells are not served to them
+- [x] The dashboard shows model routes and budgets as they are configured in the cluster, with usage per user and workspace against them
+- [x] Every admin action is in the audit log with who did it, and the audit log is searchable from the dashboard
+- [x] Everything the admin token could do for a person can be done by a platform admin through their own login
 
 ---
 

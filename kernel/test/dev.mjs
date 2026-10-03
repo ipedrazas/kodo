@@ -10,8 +10,13 @@
 // body, usage?}), or else 200 with the call it received as the body. Approval
 // queries are answered from `gatekeeper.approvals`, a Map of id to status
 // ({state, ...}) that tests fill in; queries are kept in `queries`. Audit
-// events (a Blueprint version authored or published) are kept in `events`;
-// set `gatekeeper.refuseEvents` to answer them 503.
+// events (a Blueprint version authored or published, an admin's action) are
+// kept in `events`; set `gatekeeper.refuseEvents` to answer them 503. Audit
+// searches are kept in `auditQueries` and answered with `auditRecords`.
+//
+// "root" (root@test) is a platform admin, through the bootstrap emails.
+// `workspace(name, body)` creates a workspace with the admin token, with
+// alice, bob, carol and dave as members.
 import { spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync, randomBytes, sign, timingSafeEqual } from "node:crypto";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -42,6 +47,7 @@ export async function startKernel({ vars = {}, env = {}, gatekeeper = false } = 
     OIDC_AUDIENCE: AUDIENCE,
     OIDC_JWKS_URL: idp.jwksUrl,
     ADMIN_TOKEN_SHA256: createHash("sha256").update(adminToken).digest("hex"),
+    PLATFORM_ADMIN_EMAILS: "root@test",
     ...vars,
   };
   await writeFile(join(dir, ".dev.vars"), Object.entries(allVars).map(([k, v]) => `${k}=${v}`).join("\n"));
@@ -93,6 +99,13 @@ export async function startKernel({ vars = {}, env = {}, gatekeeper = false } = 
         // Not JSON.
       }
       return { status: res.status, body: parsed };
+    },
+    // Creates or updates a workspace with the test users as members.
+    workspace: async (name, body = {}) => {
+      const members = Object.fromEntries(["alice", "bob", "carol", "dave"].map((n) => [`${n}@test`, "member"]));
+      const res = await kernelApi.api("PUT", `/workspaces/${name}`, { ...body, members: { ...members, ...body.members } });
+      if (res.status !== 200) throw new Error(`workspace failed: ${JSON.stringify(res)}`);
+      return res.body;
     },
     // Uploads a gadget file and publishes it as blueprint name@version.
     publish: async (file, name, version) => {
@@ -146,6 +159,7 @@ async function startGatekeeper(answer = echo) {
   const queries = [];
   const approvals = new Map();
   const events = [];
+  const auditQueries = [];
   let rejected = 0;
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -190,6 +204,12 @@ async function startGatekeeper(answer = echo) {
         res.end();
         return;
       }
+      if (req.url === "/v1/audit/query") {
+        const query = JSON.parse(body);
+        auditQueries.push(query);
+        res.end(JSON.stringify({ records: gk.auditRecords, scanned: gk.auditRecords.length, truncated: false }));
+        return;
+      }
       if (req.url !== "/v1/calls") {
         res.statusCode = 404;
         res.end("{}");
@@ -214,6 +234,8 @@ async function startGatekeeper(answer = echo) {
     calls,
     events,
     refuseEvents: false,
+    auditQueries,
+    auditRecords: [],
     queries,
     approvals,
     rejected: () => rejected,
@@ -239,7 +261,7 @@ async function startIdentityProvider() {
   const token = (claims, { signWith = "key", alg = "RS256" } = {}) => {
     const now = Math.floor(Date.now() / 1000);
     const header = b64({ alg, kid: "test-key", typ: "JWT" });
-    const payload = b64({ iss: ISSUER, aud: AUDIENCE, iat: now, exp: now + 300, ...claims });
+    const payload = b64({ iss: ISSUER, aud: AUDIENCE, iat: now, exp: now + 300, email_verified: true, ...claims });
     if (alg === "none") return `${header}.${payload}.`;
     const signer = signWith === "other" ? other.privateKey : key.privateKey;
     return `${header}.${payload}.${sign("sha256", Buffer.from(`${header}.${payload}`), signer).toString("base64url")}`;

@@ -12,6 +12,12 @@ export interface AuthConfig {
   jwksUrl: string;
   // SHA-256 (hex) of the admin token the operator uses, or empty for none.
   adminTokenSha256: string;
+  // Platform admins: members of this IdP group, as listed in the token's
+  // groupsClaim, and these emails, for IdPs without groups. An email counts
+  // only if the IdP has not said it is unverified.
+  adminGroup: string;
+  adminGroupsClaim: string;
+  adminEmails: string[];
 }
 
 export function authConfig(env: Env): AuthConfig {
@@ -20,6 +26,12 @@ export function authConfig(env: Env): AuthConfig {
     audience: env.OIDC_AUDIENCE ?? DEPLOY_CONFIG.audience,
     jwksUrl: env.OIDC_JWKS_URL ?? DEPLOY_CONFIG.jwksUrl,
     adminTokenSha256: env.ADMIN_TOKEN_SHA256 ?? DEPLOY_CONFIG.adminTokenSha256,
+    adminGroup: env.PLATFORM_ADMIN_GROUP ?? DEPLOY_CONFIG.adminGroup,
+    adminGroupsClaim: env.PLATFORM_ADMIN_GROUPS_CLAIM || DEPLOY_CONFIG.adminGroupsClaim || "groups",
+    adminEmails: (env.PLATFORM_ADMIN_EMAILS ?? DEPLOY_CONFIG.adminEmails)
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean),
   };
 }
 

@@ -28,6 +28,8 @@ type fakeKernel struct {
 	drafts   []map[string]any
 	auths    []string // the auth header of every call after the turn started
 	block    chan struct{}
+	// How the agent is to work, as the kernel returns it with each turn.
+	agent Config
 }
 
 func newFakeKernel(t *testing.T) (*fakeKernel, *httptest.Server) {
@@ -36,6 +38,7 @@ func newFakeKernel(t *testing.T) (*fakeKernel, *httptest.Server) {
 		session: Session{ID: "s1", Workspace: "team", Title: "New chat", Owner: Owner{User: "u1", Email: "alice@test"}, Grants: []string{"inference:model/agent:invoke"}},
 		token:   "turn-token",
 		docs:    map[string]string{"skills/email.md": "# Email\nBe brief."},
+		agent:   Config{Model: "agent", MaxSteps: 4, MaxTokens: 256},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
@@ -62,11 +65,17 @@ func (f *fakeKernel) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "POST" && path == "/sessions":
 		var b map[string]any
 		_ = json.Unmarshal(body, &b)
-		f.session.Grants = nil
-		for _, g := range b["grants"].([]any) {
-			f.session.Grants = append(f.session.Grants, g.(string))
+		// Like the kernel: named grants, or the platform's for new chats.
+		f.session.Grants = []string{"inference:model/" + f.agent.Model + ":invoke"}
+		if grants, ok := b["grants"].([]any); ok {
+			f.session.Grants = nil
+			for _, g := range grants {
+				f.session.Grants = append(f.session.Grants, g.(string))
+			}
 		}
 		writeJSON(w, 201, f.session)
+	case r.Method == "GET" && r.URL.Path == "/api/platform/agent":
+		writeJSON(w, 200, map[string]any{"model": f.agent.Model, "maxSteps": f.agent.MaxSteps, "maxTokens": f.agent.MaxTokens})
 	case r.Method == "POST" && path == "/sessions/s1/turns":
 		if identity != "alice-id-token" {
 			http.Error(w, `{"error":"no identity"}`, http.StatusUnauthorized)
@@ -77,7 +86,8 @@ func (f *fakeKernel) serve(w http.ResponseWriter, r *http.Request) {
 		f.turn = "t1"
 		f.session.Messages = append(f.session.Messages, Message{Seq: len(f.session.Messages) + 1, Role: "user", Content: b.Content})
 		f.session.Turn = &Turn{ID: "t1", ExpiresAt: time.Now().Add(time.Minute).UnixMilli()}
-		writeJSON(w, 201, map[string]any{"turn": Turn{ID: "t1", Token: f.token, ExpiresAt: f.session.Turn.ExpiresAt}, "session": f.session})
+		f.ended = false
+		writeJSON(w, 201, map[string]any{"turn": Turn{ID: "t1", Token: f.token, ExpiresAt: f.session.Turn.ExpiresAt}, "session": f.session, "agent": f.agent})
 	case r.Method == "DELETE" && path == "/sessions/s1/turns/t1":
 		if !needTurn() {
 			return
@@ -103,8 +113,8 @@ func (f *fakeKernel) serve(w http.ResponseWriter, r *http.Request) {
 			Request map[string]any `json:"request"`
 		}
 		_ = json.Unmarshal(body, &b)
-		if b.Model != "agent" {
-			f.t.Errorf("model %q, want agent", b.Model)
+		if b.Model != f.agent.Model {
+			f.t.Errorf("model %q, want %s", b.Model, f.agent.Model)
 		}
 		f.requests = append(f.requests, b.Request)
 		n := len(f.requests)
@@ -164,7 +174,7 @@ func textAnswer(text string) string {
 }
 
 func newServer(kernelURL string) *Server {
-	return &Server{Kernel: NewKernel(kernelURL), Config: Config{Model: "agent", MaxSteps: 4, MaxTokens: 256}}
+	return &Server{Kernel: NewKernel(kernelURL)}
 }
 
 // send posts a message to the agent as alice and waits for the turn to end.
@@ -410,8 +420,9 @@ func TestServerRefusesWithoutIdentityOrFromOtherOrigins(t *testing.T) {
 	}
 }
 
-func TestNewSessionsGetTheAgentsModel(t *testing.T) {
+func TestNewSessionsGetThePlatformsGrants(t *testing.T) {
 	f, srv := newFakeKernel(t)
+	f.agent.Model = "other"
 	h := newServer(srv.URL).Handler()
 	req := httptest.NewRequest("POST", "https://app.test/chat/api/workspaces/team/sessions", strings.NewReader(`{}`))
 	req.Header.Set(IdentityHeader, "alice-id-token")
@@ -420,8 +431,39 @@ func TestNewSessionsGetTheAgentsModel(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
-	if len(f.session.Grants) != 1 || f.session.Grants[0] != "inference:model/agent:invoke" {
+	// The agent names no grants; the kernel gives the platform's.
+	if len(f.session.Grants) != 1 || f.session.Grants[0] != "inference:model/other:invoke" {
 		t.Fatalf("grants %v", f.session.Grants)
+	}
+}
+
+func TestSettingsFromTheKernelApplyToTheNextTurn(t *testing.T) {
+	f, srv := newFakeKernel(t)
+	f.model = func(n int, req map[string]any) (int, string) {
+		return 200, toolCallAnswer("c"+string(rune('0'+n)), "run_code", `{"code":"return 1"}`)
+	}
+	f.run = func(string) RunResult { return RunResult{ID: "r1", OK: true, Value: json.RawMessage(`1`)} }
+	s := newServer(srv.URL)
+	send(t, s, f, "loop")
+	if len(f.requests) != 4 || f.requests[0]["max_tokens"] != float64(256) {
+		t.Fatalf("first turn: %d calls, max_tokens %v", len(f.requests), f.requests[0]["max_tokens"])
+	}
+	// An admin changes the settings; the agent is not restarted.
+	f.mu.Lock()
+	f.agent = Config{Model: "other", MaxSteps: 2, MaxTokens: 1024}
+	f.requests = nil
+	f.mu.Unlock()
+	send(t, s, f, "loop again")
+	if len(f.requests) != 2 || f.requests[0]["max_tokens"] != float64(1024) {
+		t.Fatalf("second turn: %d calls, max_tokens %v", len(f.requests), f.requests[0]["max_tokens"])
+	}
+	// The page's config is the kernel's too.
+	req := httptest.NewRequest("GET", "https://app.test/chat/api/config", nil)
+	req.Header.Set(IdentityHeader, "alice-id-token")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `"grant":"inference:model/other:invoke"`) || !strings.Contains(rec.Body.String(), `"maxTokens":1024`) {
+		t.Fatalf("config %d %s", rec.Code, rec.Body)
 	}
 }
 

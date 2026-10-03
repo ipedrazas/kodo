@@ -12,7 +12,9 @@ export interface BlueprintVersion {
   publishedAt: number;
   // A draft can be used only by its author; a published version by anyone.
   // Versions published with the admin token are published from the start.
-  status?: "draft" | "published";
+  // A withdrawn version was published and then taken back by a platform
+  // admin: no new cell may use it, and cells that do keep running.
+  status?: "draft" | "published" | "withdrawn";
   // Who authored it, for a version the agent wrote: the session's owner,
   // and the session.
   author?: Owner;
@@ -20,6 +22,9 @@ export interface BlueprintVersion {
   workspace?: string;
   // Who published it, if not the admin token.
   publishedBy?: Owner;
+  // Who withdrew it, and when.
+  withdrawnBy?: Owner;
+  withdrawnAt?: number;
   createdAt?: number;
 }
 
@@ -62,6 +67,32 @@ export class Catalog extends DurableObject<Env> {
     // The fleet's workspaces by name, for the settings page to offer. A
     // workspace is its own object; this only remembers that it exists.
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS workspaces (name TEXT PRIMARY KEY)");
+    // Who belongs to which workspace, copied from each workspace when its
+    // members change, so a user's workspaces can be listed in one place.
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS memberships (
+      workspace TEXT NOT NULL,
+      email TEXT NOT NULL,
+      role TEXT NOT NULL,
+      PRIMARY KEY (workspace, email)
+    )`);
+  }
+
+  setMemberships(workspace: string, members: Record<string, string>): void {
+    this.rememberWorkspace(workspace);
+    this.ctx.storage.sql.exec("DELETE FROM memberships WHERE workspace = ?", workspace);
+    for (const [email, role] of Object.entries(members)) {
+      this.ctx.storage.sql.exec("INSERT INTO memberships VALUES (?, ?, ?)", workspace, email, role);
+    }
+  }
+
+  // The workspaces a user belongs to, with their role in each.
+  membershipsOf(email: string): { workspace: string; role: string }[] {
+    return this.ctx.storage.sql
+      .exec<{ workspace: string; role: string }>(
+        "SELECT workspace, role FROM memberships WHERE email = ? ORDER BY workspace",
+        email,
+      )
+      .toArray();
   }
 
   rememberWorkspace(name: string): void {
@@ -154,6 +185,39 @@ export class Catalog extends DurableObject<Env> {
     return { ok: true, value: this.get(name, version)! };
   }
 
+  // Withdraws a published version, so no new cell can use it, or restores
+  // a withdrawn one. Cells already on it are not touched.
+  setWithdrawn(name: string, version: string, withdrawn: boolean, by: Owner): CatalogResult<BlueprintVersion> {
+    const b = this.get(name, version);
+    if (!b) return fail(404, "blueprint version does not exist");
+    if (b.status === "draft") return fail(409, `${name} ${version} is a draft; only its author can use it`);
+    if (withdrawn === (b.status === "withdrawn")) {
+      return fail(409, `${name} ${version} is ${withdrawn ? "already withdrawn" : "not withdrawn"}`);
+    }
+    const row = this.ctx.storage.sql
+      .exec<{ authorship: string | null }>("SELECT authorship FROM versions WHERE name = ? AND version = ?", name, version)
+      .one();
+    const authorship = { ...(row.authorship ? JSON.parse(row.authorship) : {}) };
+    if (withdrawn) Object.assign(authorship, { withdrawnBy: by, withdrawnAt: Date.now() });
+    else {
+      delete authorship.withdrawnBy;
+      delete authorship.withdrawnAt;
+    }
+    this.ctx.storage.sql.exec(
+      "UPDATE versions SET status = ?, authorship = ? WHERE name = ? AND version = ?",
+      withdrawn ? "withdrawn" : "published",
+      Object.keys(authorship).length ? JSON.stringify(authorship) : null,
+      name,
+      version,
+    );
+    return { ok: true, value: this.get(name, version)! };
+  }
+
+  // Every version of every name, for platform admins.
+  all(): BlueprintVersion[] {
+    return this.select("ORDER BY name, created_at, published_at, rowid");
+  }
+
   get(name: string, version: string): BlueprintVersion | null {
     const rows = this.select("WHERE name = ? AND version = ?", name, version);
     return rows[0] ?? null;
@@ -163,9 +227,9 @@ export class Catalog extends DurableObject<Env> {
   // or, for its author, the latest draft of a name with none published.
   latest(name: string, viewer: Viewer = { admin: true }): BlueprintVersion | null {
     const all = this.select("WHERE name = ? ORDER BY published_at DESC, created_at DESC, rowid DESC", name);
-    const published = all.find((v) => v.status !== "draft");
+    const published = all.find((v) => v.status === "published");
     if (published) return published;
-    return all.find((v) => visible(v, viewer)) ?? null;
+    return all.find((v) => v.status === "draft" && visible(v, viewer)) ?? null;
   }
 
   versions(name: string, viewer: Viewer = { admin: true }): BlueprintVersion[] {
@@ -199,7 +263,7 @@ export class Catalog extends DurableObject<Env> {
           capabilities: JSON.parse(r.capabilities),
           tier: r.tier,
           publishedAt: r.published_at,
-          status: r.status === "draft" ? "draft" : "published",
+          status: r.status === "draft" ? "draft" : r.status === "withdrawn" ? "withdrawn" : "published",
           createdAt: r.created_at || r.published_at,
         };
         if (r.authorship) {
@@ -208,6 +272,8 @@ export class Catalog extends DurableObject<Env> {
           if (a.session) v.session = a.session;
           if (a.workspace) v.workspace = a.workspace;
           if (a.publishedBy) v.publishedBy = a.publishedBy;
+          if (a.withdrawnBy) v.withdrawnBy = a.withdrawnBy;
+          if (a.withdrawnAt) v.withdrawnAt = a.withdrawnAt;
         }
         return v;
       });

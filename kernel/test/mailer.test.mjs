@@ -21,7 +21,7 @@ function queue(call) {
 
 before(async () => {
   kernel = await startKernel({ gatekeeper: queue });
-  await kernel.api("PUT", "/workspaces/examples", {});
+  await kernel.workspace("examples", {});
   const source = await readFile(new URL("../../examples/mailer/gadget.js", import.meta.url));
   const digest = (await kernel.api("POST", "/bundles", source)).body.digest;
   assert.equal((await kernel.api("PUT", "/blueprints/mailer/1.0.0", { bundle: digest, capabilities: [SEND] })).status, 201);
