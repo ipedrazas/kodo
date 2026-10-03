@@ -15,6 +15,9 @@ cd "$root"
 : "${CAROL_PASSWORD:?run deploy/k3s/auth-secrets.sh: carol has no password}"
 run=$(date -u +%Y%m%d%H%M%S)
 WS=admin-e2e
+# macOS bash 3.2 brace-expands JSON with commas inside "$(...)", so bodies
+# with more than one field are built in these variables first.
+fixture_e2e='{"blueprint":"fixture","version":"e2e"}'
 json() { python3 -c "import json, sys; d = json.load(sys.stdin); print($1)"; }
 body() { head -1 <<<"$1"; }
 code() { tail -1 <<<"$1"; }
@@ -81,14 +84,15 @@ for who in ("alice", "bob"):
 print("team:", ", ".join(e + " (" + x["role"] + ", added by " + x["addedBy"] + ")" for e, x in sorted(m.items())))' || fail "team's members: $members"
 
 step "A workspace admin manages members, quota and docs of their workspace and nothing beyond it"
-ok "$(api carol PUT "/workspaces/$WS" "{\"quota\":5,\"members\":{\"alice@$DOMAIN\":\"admin\"}}")" 200 "carol creating $WS" >/dev/null
+create_ws="{\"quota\":5,\"members\":{\"alice@$DOMAIN\":\"admin\"}}"
+ok "$(api carol PUT "/workspaces/$WS" "$create_ws")" 200 "carol creating $WS" >/dev/null
 api alice DELETE "/workspaces/$WS/members/bob@$DOMAIN" >/dev/null 2>&1 || true
 [[ $(api alice GET "/workspaces/$WS" | head -1 | json 'd["role"]') == admin ]] || fail "alice is not $WS's admin"
-[[ $(code "$(api bob POST "/workspaces/$WS/cells" '{"blueprint":"fixture","version":"e2e"}')") == 403 ]] || fail "bob, not a member, created a cell"
+[[ $(code "$(api bob POST "/workspaces/$WS/cells" "$fixture_e2e")") == 403 ]] || fail "bob, not a member, created a cell"
 [[ $(code "$(chat bob POST "/workspaces/$WS/sessions" '{}')") == 403 ]] || fail "bob, not a member, started a chat"
 echo "bob, not a member, can create neither cells nor chats in $WS"
 ok "$(api alice PUT "/workspaces/$WS/members/bob@$DOMAIN" '{"role":"member"}')" 200 "alice adding bob" >/dev/null
-bobs=$(ok "$(api bob POST "/workspaces/$WS/cells" '{"blueprint":"fixture","version":"e2e"}')" 201 "bob's cell, as a member" | json 'd["id"]')
+bobs=$(ok "$(api bob POST "/workspaces/$WS/cells" "$fixture_e2e")" 201 "bob's cell, as a member" | json 'd["id"]')
 cells+=("$bobs")
 [[ $(api alice PUT "/workspaces/$WS" '{"quota":7}' | head -1 | json 'd["quota"]') == 7 ]] || fail "alice setting the quota"
 ok "$(c alice -X PUT -H "Origin: $APP" -H 'content-type: text/markdown' --data-binary $'# Admin e2e\n\nRun '"$run" -w '\n%{http_code}' "$APP/api/workspaces/$WS/docs/e2e.md")" 200 "alice writing a doc" >/dev/null
@@ -105,10 +109,9 @@ envs=$(kubectl -n kodo-system get deploy kodo-agent -o json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)["spec"]["template"]["spec"]["containers"][0]
 print(" ".join(sorted([e["name"] for e in d.get("env", [])] + [r["configMapRef"]["name"] for r in d.get("envFrom", []) if "configMapRef" in r])))')
-cm=$(kubectl -n kodo-system get cm -o json | python3 -c '
-import json, sys
-for i in json.load(sys.stdin)["items"]:
-    if i["metadata"]["name"].startswith("kodo-agent"): print(" ".join(sorted(i.get("data", {}))))' | sort -u)
+# The ConfigMap the Deployment uses; kustomize leaves older ones behind.
+cm_name=$(kubectl -n kodo-system get deploy kodo-agent -o jsonpath='{.spec.template.spec.containers[0].envFrom[0].configMapRef.name}')
+cm=$(kubectl -n kodo-system get cm "$cm_name" -o json | python3 -c 'import json, sys; print(" ".join(sorted(json.load(sys.stdin).get("data", {}))))')
 [[ $cm == KERNEL_URL ]] || fail "the agent's ConfigMap has more than KERNEL_URL: $cm"
 echo "the agent's environment: $envs; its ConfigMap holds only $cm"
 settings=$(ok "$(api carol GET /admin/settings)" 200 "reading the settings")
@@ -121,13 +124,18 @@ ok "$(chat alice POST "/workspaces/team/sessions/$sid/messages" '{"content":"Say
 idle() { [[ $(api alice GET "/workspaces/team/sessions/$sid" | head -1 | json 'd["turn"]') == None ]]; }
 wait_for 120 "the turn to end" idle
 api alice GET "/workspaces/team/sessions/$sid" | head -1 > "$results/admin-session.json"
-python3 - "$results/admin-session.json" <<'PY' || fail "the turn did not use the simulator"
+# The turn's model call went to the Gatekeeper as the chat, with the
+# simulator's grant. (The simulator may refuse the agent's tool schema; what
+# matters here is which model the agent asked for.)
+api carol GET "/admin/audit?cell=$sid&days=1" | head -1 > "$results/admin-turn-audit.json"
+python3 - "$results/admin-session.json" "$results/admin-turn-audit.json" <<'PY' || fail "the turn did not use the simulator"
 import json, sys
-s = json.load(open(sys.argv[1]))
+s, audit = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))["records"]
 assert "inference:model/sim:invoke" in s["grants"], s["grants"]
+calls = [r for r in audit if r["decision"] == "allowed"]
+assert calls and all(r["grant"] == "inference:model/sim:invoke" for r in calls), audit
 answers = [m for m in s["messages"] if m["role"] == "assistant"]
-assert answers and answers[-1]["content"], s["messages"]
-print(f"the turn ran on the simulator: {answers[-1]['content'][:80]!r}")
+print(f"the turn's {len(calls)} model call(s) used {calls[0]['grant']}; the agent said {answers[-1]['content'][:70]!r}")
 PY
 sim_calls=$(api carol GET /admin/usage | head -1 | python3 -c '
 import json, sys
@@ -142,11 +150,12 @@ echo "no agent pod restarted ($pods); team has made $sim_calls model calls this 
 step "A withdrawn Blueprint version cannot be instantiated; existing cells keep running"
 digest=$(ok "$(c carol -X POST -H "Origin: $APP" -H 'content-type: text/javascript' --data-binary @kernel/test/gadgets/fixture.js -w '\n%{http_code}' "$APP/api/bundles")" 201 "carol uploading" | json 'd["digest"]')
 ok "$(api carol PUT "/blueprints/fixture/a$run" "{\"bundle\":\"$digest\"}")" 201 "carol publishing fixture a$run" >/dev/null
-alices=$(ok "$(api alice POST "/workspaces/$WS/cells" "{\"blueprint\":\"fixture\",\"version\":\"a$run\"}")" 201 "alice's cell" | json 'd["id"]')
+fixture_run="{\"blueprint\":\"fixture\",\"version\":\"a$run\"}"
+alices=$(ok "$(api alice POST "/workspaces/$WS/cells" "$fixture_run")" 201 "alice's cell" | json 'd["id"]')
 cells+=("$alices")
 ok "$(api carol POST "/blueprints/fixture/a$run/withdraw")" 200 "withdrawing" >/dev/null
 withdrawn="a$run"
-[[ $(code "$(api bob POST "/workspaces/$WS/cells" "{\"blueprint\":\"fixture\",\"version\":\"a$run\"}")") == 410 ]] || fail "a cell from a withdrawn version"
+[[ $(code "$(api bob POST "/workspaces/$WS/cells" "$fixture_run")") == 410 ]] || fail "a cell from a withdrawn version"
 [[ $(status alice "https://$alices.g.$DOMAIN/") == 200 ]] || fail "alice's cell on the withdrawn version stopped"
 echo "fixture a$run withdrawn: no new cells (410); alice's $alices still serves"
 
