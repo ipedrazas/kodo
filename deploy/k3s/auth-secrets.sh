@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Creates the secrets the LAN identity setup needs, once: a Dex client secret
-# shared with the gateway, and passwords for the test users alice and bob.
+# shared with the gateway, and passwords for the test users alice, bob and
+# carol (the platform admin, named in fleet.yaml).
 # The plain values go to .auth.env (git-ignored) for the e2e test; Kubernetes
 # gets the client secret and bcrypt hashes.
 set -euo pipefail
@@ -13,6 +14,8 @@ if [[ ! -f .auth.env ]]; then
   } > .auth.env
   chmod 600 .auth.env
 fi
+# carol came with Phase 12.
+grep -q '^CAROL_PASSWORD=' .auth.env || echo "CAROL_PASSWORD=$(openssl rand -hex 12)" >> .auth.env
 set -a
 . ./.auth.env
 set +a
@@ -23,6 +26,7 @@ kubectl -n kodo-auth create secret generic dex-secrets \
   --from-literal=DEX_CLIENT_SECRET="$DEX_CLIENT_SECRET" \
   --from-literal=ALICE_PASSWORD_HASH="$(hash "$ALICE_PASSWORD")" \
   --from-literal=BOB_PASSWORD_HASH="$(hash "$BOB_PASSWORD")" \
+  --from-literal=CAROL_PASSWORD_HASH="$(hash "$CAROL_PASSWORD")" \
   --dry-run=client -o yaml | kubectl apply -f -
 kubectl create namespace kodo --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n kodo create secret generic oidc-client \

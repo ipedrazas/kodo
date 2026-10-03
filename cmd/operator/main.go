@@ -53,6 +53,7 @@ func main() {
 	must((&controller.FleetReconciler{Client: mgr.GetClient(), Scheme: scheme}).SetupWithManager(mgr))
 	must((&controller.BlueprintReconciler{Client: mgr.GetClient(), Kernel: kernel}).SetupWithManager(mgr))
 	must((&controller.WorkspaceReconciler{Client: mgr.GetClient(), Kernel: kernel}).SetupWithManager(mgr))
+	must((&controller.ClusterReporter{Client: mgr.GetClient(), Kernel: kernel}).SetupWithManager(mgr))
 	must(mgr.AddHealthzCheck("healthz", healthz.Ping))
 	must(mgr.AddReadyzCheck("readyz", healthz.Ping))
 

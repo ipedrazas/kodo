@@ -47,6 +47,13 @@ rules:
   - patch
   - update
 - apiGroups:
+  - aigateway.envoyproxy.io
+  resources:
+  - aigatewayroutes
+  verbs:
+  - get
+  - list
+- apiGroups:
   - apps
   resources:
   - statefulsets
@@ -70,6 +77,13 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - gateway.envoyproxy.io
+  resources:
+  - backendtrafficpolicies
+  verbs:
+  - get
+  - list
 - apiGroups:
   - kodo.dev
   resources:

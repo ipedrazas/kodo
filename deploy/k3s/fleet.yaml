@@ -23,6 +23,13 @@ spec:
     audience: kodo
     # Fetched from inside the cluster, not through the gateway.
     jwksURL: http://dex.kodo-auth.svc:5556/keys
+  # Platform admins, at app.hiddenfield.dev/admin/. Dex's static users have
+  # no groups, so by email.
+  admins:
+    emails: [carol@hiddenfield.dev]
+  # The inference gateway's models and rate limits, which the operator
+  # reports to the kernel for the dashboard.
+  inference: {}
   # Capability calls go to the Gatekeeper in kodo-system.
   gatekeeper: {}
   # Default-deny egress: DNS, the fleet's own nodes and the Gatekeeper, which

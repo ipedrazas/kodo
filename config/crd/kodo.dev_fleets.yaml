@@ -53,6 +53,29 @@ spec:
           spec:
             description: FleetSpec describes a celld fleet running the kodo kernel.
             properties:
+              admins:
+                description: |-
+                  Admins names the platform admins, who administer the fleet through
+                  their own login at app.<domain>/admin/: settings, budgets, workspaces,
+                  Blueprints, users and the audit log.
+                properties:
+                  emails:
+                    description: |-
+                      Emails are platform admins by email, if the IdP has not said the
+                      email is unverified.
+                    items:
+                      type: string
+                    type: array
+                  group:
+                    description: Group is the IdP group whose members are platform
+                      admins.
+                    type: string
+                  groupsClaim:
+                    default: groups
+                    description: GroupsClaim is the ID token claim that lists the
+                      user's groups.
+                    type: string
+                type: object
               auth:
                 description: |-
                   Auth is the OIDC provider whose ID tokens the kernel accepts. Without
@@ -335,6 +358,17 @@ spec:
                   work.
                 format: int32
                 type: integer
+              inference:
+                description: |-
+                  Inference locates the inference gateway's configuration, which the
+                  operator reports to the kernel each minute so the admin dashboard
+                  shows the models, their backends and the rate limits as configured.
+                properties:
+                  namespace:
+                    default: kodo-inference
+                    description: Namespace of the AIGatewayRoutes and BackendTrafficPolicies.
+                    type: string
+                type: object
               kernel:
                 description: |-
                   Kernel is the kernel image. The operator runs it as a Job that deploys
