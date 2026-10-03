@@ -223,9 +223,13 @@ func sessionPath(ws, id string) string {
 	return "/workspaces/" + url.PathEscape(ws) + "/sessions/" + url.PathEscape(id)
 }
 
-// CreateSession creates a session owned by the user with these grants.
+// CreateSession creates a session owned by the user with these grants, or,
+// if grants is nil, those the platform gives new chats.
 func (k *Kernel) CreateSession(ctx context.Context, auth Auth, ws, title string, grants []string) (Session, error) {
-	body := map[string]any{"grants": grants}
+	body := map[string]any{}
+	if grants != nil {
+		body["grants"] = grants
+	}
 	if title != "" {
 		body["title"] = title
 	}
@@ -235,14 +239,22 @@ func (k *Kernel) CreateSession(ctx context.Context, auth Auth, ws, title string,
 }
 
 // StartTurn starts a turn with the user's message, and returns the turn
-// with its token and the session.
-func (k *Kernel) StartTurn(ctx context.Context, auth Auth, ws, id, content string) (Turn, Session, error) {
+// with its token, the session, and how the agent is to work in this turn.
+func (k *Kernel) StartTurn(ctx context.Context, auth Auth, ws, id, content string) (Turn, Session, Config, error) {
 	var out struct {
 		Turn    Turn    `json:"turn"`
 		Session Session `json:"session"`
+		Agent   Config  `json:"agent"`
 	}
 	err := k.do(ctx, auth, http.MethodPost, sessionPath(ws, id)+"/turns", map[string]string{"content": content}, &out)
-	return out.Turn, out.Session, err
+	return out.Turn, out.Session, out.Agent.orDefault(), err
+}
+
+// Agent reads how the agent works now.
+func (k *Kernel) Agent(ctx context.Context, auth Auth) (Config, error) {
+	var c Config
+	err := k.do(ctx, auth, http.MethodGet, "/platform/agent", nil, &c)
+	return c.orDefault(), err
 }
 
 // EndTurn ends a turn.

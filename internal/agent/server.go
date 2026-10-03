@@ -18,7 +18,6 @@ import (
 // to the kernel, which checks it, and keeps it no longer than the request.
 type Server struct {
 	Kernel *Kernel
-	Config Config
 	Log    *slog.Logger
 
 	mu      sync.Mutex
@@ -82,11 +81,18 @@ func crossOrigin(r *http.Request) bool {
 	return err != nil || u.Host != r.Host
 }
 
-func (s *Server) config(w http.ResponseWriter, _ *http.Request, _ Auth) {
-	writeJSON(w, http.StatusOK, map[string]any{"model": s.Config.Model, "grant": modelCapability(s.Config.Model)})
+// config tells the page how the agent works now, as the kernel says.
+func (s *Server) config(w http.ResponseWriter, r *http.Request, auth Auth) {
+	c, err := s.Kernel.Agent(r.Context(), auth)
+	if err != nil {
+		kernelError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"model": c.Model, "grant": modelCapability(c.Model), "maxTokens": c.MaxTokens, "maxSteps": c.MaxSteps})
 }
 
-// createSession creates a session that can use the agent's model.
+// createSession creates a session with the grants the platform gives new
+// chats, which include the agent's model.
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request, auth Auth) {
 	var body struct {
 		Title string `json:"title"`
@@ -97,7 +103,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request, auth Auth
 			return
 		}
 	}
-	session, err := s.Kernel.CreateSession(r.Context(), auth, r.PathValue("ws"), body.Title, []string{modelCapability(s.Config.Model)})
+	session, err := s.Kernel.CreateSession(r.Context(), auth, r.PathValue("ws"), body.Title, nil)
 	if err != nil {
 		kernelError(w, err)
 		return
@@ -116,7 +122,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, auth Auth) {
 		return
 	}
 	ws, id := r.PathValue("ws"), r.PathValue("id")
-	tn, session, err := s.Kernel.StartTurn(r.Context(), auth, ws, id, body.Content)
+	tn, session, config, err := s.Kernel.StartTurn(r.Context(), auth, ws, id, body.Content)
 	if err != nil {
 		kernelError(w, err)
 		return
@@ -130,7 +136,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, auth Auth) {
 	}
 	t := &turn{
 		kernel:  s.Kernel,
-		config:  s.Config,
+		config:  config,
 		log:     s.log(),
 		app:     "https://" + r.Host,
 		ws:      ws,

@@ -5,7 +5,8 @@
 #
 #   default   OpenRouter, meta-llama/llama-3.1-8b-instruct
 #   agent     OpenRouter, deepseek/deepseek-v4-flash: what the agent thinks
-#             with (AGENT_MODEL); good at tool calls and code, and cheap
+#             with by default (the admin dashboard's agent model); good at
+#             tool calls and code, and cheap
 #   sim       the in-cluster simulator (free; answers with random text)
 #
 # A backend sees x-kodo-user (the owner's subject at the identity provider),
@@ -43,7 +44,7 @@ spec:
       backendRefs:
         - name: openrouter
           modelNameOverride: deepseek/deepseek-v4-flash
-      # The agent writes a whole gadget in one answer: up to AGENT_MAX_TOKENS
+      # The agent writes a whole gadget in one answer: up to its output limit
       # (16384) at the 230-400 tokens/s DeepSeek gives.
       timeouts:
         request: 120s

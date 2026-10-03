@@ -1,7 +1,7 @@
 # The agent in kodo-system: the chat at app.<domain>/chat/. It needs, in the
 # same namespace, ConfigMap kodo-agent with KERNEL_URL (the fleet's Service,
-# e.g. http://kodo.kodo.svc) and optionally AGENT_MODEL, AGENT_MAX_STEPS and
-# AGENT_MAX_TOKENS (see cmd/agent/main.go). It holds no state and no
+# e.g. http://kodo.kodo.svc). Its model, output limit and steps per turn are
+# platform settings in the kernel (app.<domain>/admin/). It holds no state and no
 # credentials: it acts with the user's ID token, which the gateway forwards,
 # and the turn tokens the kernel issues.
 apiVersion: v1

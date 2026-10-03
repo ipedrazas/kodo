@@ -6,24 +6,21 @@
 //
 // Configuration is from the environment:
 //
-//	AGENT_ADDR        where it listens (default :8080)
-//	KERNEL_URL        the fleet's kernel API, e.g. http://kodo.kodo.svc (required)
-//	AGENT_MODEL       the model it thinks with; new sessions are granted
-//	                  inference:model/<AGENT_MODEL>:invoke (default agent)
-//	AGENT_MAX_STEPS   model calls per turn, at most (default 10)
-//	AGENT_MAX_TOKENS  max_tokens of each model call (default 16384; a gadget is
-//	                  written in one answer)
+//	AGENT_ADDR  where it listens (default :8080)
+//	KERNEL_URL  the fleet's kernel API, e.g. http://kodo.kodo.svc (required)
+//
+// How the agent works (its model, output limit and steps per turn) is a
+// platform setting in the kernel, which platform admins change at
+// app.<domain>/admin/; the kernel returns it with every turn.
 package main
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -48,23 +45,16 @@ func run(log *slog.Logger) error {
 	if kernelURL == "" {
 		return errors.New("KERNEL_URL is required")
 	}
-	steps, err := intEnv("AGENT_MAX_STEPS", 10)
-	if err != nil {
-		return err
+	for _, old := range []string{"AGENT_MODEL", "AGENT_MAX_STEPS", "AGENT_MAX_TOKENS"} {
+		if os.Getenv(old) != "" {
+			log.Warn(old + " is ignored: the agent's settings are in the admin dashboard")
+		}
 	}
-	tokens, err := intEnv("AGENT_MAX_TOKENS", 16384)
-	if err != nil {
-		return err
-	}
-	s := &agent.Server{
-		Kernel: agent.NewKernel(kernelURL),
-		Config: agent.Config{Model: env("AGENT_MODEL", "agent"), MaxSteps: steps, MaxTokens: tokens},
-		Log:    log,
-	}
+	s := &agent.Server{Kernel: agent.NewKernel(kernelURL), Log: log}
 	srv := &http.Server{Addr: env("AGENT_ADDR", ":8080"), Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	errs := make(chan error, 1)
 	go func() { errs <- srv.ListenAndServe() }()
-	log.Info("agent started", "version", version.String(), "addr", srv.Addr, "kernel", kernelURL, "model", s.Config.Model)
+	log.Info("agent started", "version", version.String(), "addr", srv.Addr, "kernel", kernelURL)
 
 	select {
 	case err := <-errs:
@@ -85,16 +75,4 @@ func env(name, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-func intEnv(name string, fallback int) (int, error) {
-	v := os.Getenv(name)
-	if v == "" {
-		return fallback, nil
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("%s must be a positive number", name)
-	}
-	return n, nil
 }
