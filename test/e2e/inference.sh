@@ -8,8 +8,8 @@
 #   OPENROUTER_API_KEY   the platform's OpenRouter key, in .env; the test only
 #                        checks it never reaches the fleet. The default model
 #                        costs a few hundred tokens per run.
-# It moves the model "default" to the simulator and back, and adds a budget
-# for bob and removes it; both are restored on exit.
+# It moves the model "default" to the simulator and back, and gives bob a
+# budget of his own in the kernel and removes it; both are restored on exit.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
@@ -38,20 +38,15 @@ ask() { # ask USER CELL MODEL PROMPT: the gadget's answer, then the status
     -d "{\"model\":\"$3\",\"prompt\":\"$4\"}" "$(cell_url "$2")/api/chat"
 }
 admin_api() { deploy/fleet/api.sh "$(kubectl config current-context)" "$@"; }
-budget_rule() { # the index of bob's test budget in the policy, or nothing
-  "${INF[@]}" get backendtrafficpolicy kodo-inference-budgets -o json | python3 -c '
-import json, sys
-rules = json.load(sys.stdin)["spec"]["rateLimit"]["global"]["rules"]
-for i, r in enumerate(rules):
-    for s in r.get("clientSelectors", []):
-        if any(h.get("value") == sys.argv[1] for h in s.get("headers", [])): print(i)' "$1"
-}
+budgets=''
+set_budgets() { [[ $(admin_api PUT /admin/budgets "$1" | sed -n 2p) == 200 ]] || fail "setting budgets to $1"; }
 route_default() { # route_default BACKEND MODEL: point the model "default" at a backend
   "${INF[@]}" patch aigatewayroute kodo-inference --type=json -p "[
     {\"op\":\"replace\",\"path\":\"/spec/rules/0/backendRefs\",\"value\":[{\"name\":\"$1\",\"modelNameOverride\":\"$2\"}]}]" >/dev/null
 }
 restore() {
   kubectl apply -k deploy/inference >/dev/null 2>&1 || true
+  [[ -n $budgets ]] && admin_api PUT /admin/budgets "$budgets" >/dev/null 2>&1 || true
 }
 cleanup() {
   restore
@@ -147,27 +142,34 @@ back() { [[ $(ask alice "$alice_cell" default "and now?" | head -1 | json 'd.get
 wait_for 60 "the model default to move back to OpenRouter" back
 echo "default answered by OpenRouter again"
 
-step "A user over budget is refused at the gateway"
-# A budget of 20 tokens an hour for bob alone, added for this test.
-"${INF[@]}" patch backendtrafficpolicy kodo-inference-budgets --type=json -p "[{\"op\":\"add\",
-  \"path\":\"/spec/rateLimit/global/rules/-\",\"value\":{\"clientSelectors\":[{\"headers\":[{\"name\":\"x-kodo-user\",
-  \"type\":\"Exact\",\"value\":\"$bob_sub\"}]}],\"limit\":{\"requests\":20,\"unit\":\"Hour\"},\"shared\":true,
-  \"cost\":{\"request\":{\"from\":\"Number\",\"number\":0},\"response\":{\"from\":\"Metadata\",
-  \"metadata\":{\"namespace\":\"io.envoy.ai_gateway\",\"key\":\"llm_total_token\"}}}}}]" >/dev/null
-[[ -n $(budget_rule "$bob_sub") ]] || fail "bob's budget was not added"
+step "A user over budget is refused"
+# Budgets are the kernel's since Phase 12: bob gets one of a single token
+# this month, so his next call crosses it and the one after is refused.
+budgets=$(admin_api GET /admin/budgets | head -1)
+[[ $budgets == '{'* ]] || fail "reading the budgets: $budgets"
+set_budgets "$(BUDGETS=$budgets python3 -c '
+import json, os, sys
+b = json.loads(os.environ["BUDGETS"]); b["users"] = {**b.get("users", {}), sys.argv[1]: 1}; print(json.dumps(b))' "$bob_sub")"
 refused() { [[ $(ask bob "$bob_cell" sim "spend some tokens for the budget test please" | tail -1) == 429 ]]; }
-wait_for 90 "bob to be refused once his budget is spent" refused
+wait_for 30 "bob to be refused once his budget is spent" refused
 out=$(ask bob "$bob_cell" sim "one more")
 [[ $(tail -1 <<<"$out") == 429 && $(head -1 <<<"$out" | json 'd["error"]') == *budget* ]] || fail "bob over budget: $out"
 echo "bob: $(head -1 <<<"$out" | json 'd["error"]')"
 [[ $(ask alice "$alice_cell" sim "am I still fine?" | tail -1) == 200 ]] || fail "alice was refused with bob's budget"
 echo "alice, in the same workspace, is not affected"
-restore
-removed() { [[ -z $(budget_rule "$bob_sub") ]]; }
-wait_for 60 "bob's budget to be removed" removed
+set_budgets "$budgets"
 fresh() { [[ $(ask bob "$bob_cell" sim "back again" | tail -1) == 200 ]]; }
-wait_for 60 "bob to be served without his test budget" fresh
+wait_for 30 "bob to be served without his test budget" fresh
 echo "with the test budget gone, bob is served again"
+spend=$(admin_api GET "/admin/usage?month=$month" | head -1)
+SPEND=$spend python3 - "$bob_sub" <<'PY' || fail "budget usage: $spend"
+import json, os, sys
+u = json.loads(os.environ["SPEND"])
+bob = next(x for x in u["users"] if x["user"] == sys.argv[1])
+team = next(x for x in u["workspaces"] if x["workspace"] == "team")
+assert bob["calls"] >= 2 and bob["tokens"] > 0 and team["tokens"] >= bob["tokens"], (bob, team)
+print(f"spent this month: bob {bob['tokens']} tokens of {bob['budget']}, team {team['tokens']} of {team['budget']}")
+PY
 
 step "Token usage, storage and activity are reported per user and team"
 sleep 7 # the cells write their counts a few seconds after use
@@ -218,11 +220,11 @@ alice_cell, bob_cell, path = sys.argv[1:]
 records = [json.loads(l) for l in open(path) if l.strip()]
 metered = [r for r in records if r["decision"] == "metered"]
 ok = [r for r in metered if r["cell"] == alice_cell and r["status"] == 200 and r["usage"]["total"] > 0]
+# The kernel refuses calls over budget before they reach the Gatekeeper.
 refused = [r for r in metered if r["cell"] == bob_cell and r["status"] == 429]
-assert ok and refused, (len(metered), len(ok), len(refused))
+assert ok and not refused, (len(metered), len(ok), len(refused))
 assert all(r["user"] and r["workspace"] == "team" and r["grant"].startswith("inference:model/") for r in metered)
 print(f"audit: {len(metered)} metered calls, e.g. {json.dumps(ok[0])}")
-print(f"       bob's refusals are recorded too: {len(refused)} at 429")
 PY
 # The gateway's own metrics, labelled with workspace and Blueprint only.
 pod=$(kubectl -n envoy-gateway-system get pod -l gateway.envoyproxy.io/owning-gateway-name=kodo-inference -o name | head -1)

@@ -1,11 +1,14 @@
-# Budgets and rate limits, enforced by the inference gateway on the headers
-# the Gatekeeper sets: x-kodo-user (the owner's subject) and x-kodo-workspace
-# (<fleet namespace>/<fleet>/<workspace>). A call is let through while every
-# rule that matches it has budget left, and what it used (total tokens, from
-# the backend's answer) is then taken from each; a call over any of them is
-# refused with 429. Counters live in Redis and reset each period; changing
-# the rules can reset them too. A rule for one user or workspace (an Exact
-# header match) adds a limit, so it can only lower the default.
+# Rate limits, enforced by the inference gateway on the headers the
+# Gatekeeper sets: x-kodo-user (the owner's subject) and x-kodo-workspace
+# (<fleet namespace>/<fleet>/<workspace>). A call over a limit is refused
+# with 429. Counters live in Redis and reset each period.
+#
+# Monthly token budgets per user and per workspace are not here: since
+# Phase 12 the kernel keeps them, platform admins set them at
+# app.<domain>/admin/, and a model call over budget never reaches the
+# Gatekeeper. This policy is cluster protection: a ceiling on how fast any
+# one user can call models, whatever their budget. The admin dashboard shows
+# it as configured, through the operator's cluster report.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy
 metadata:
@@ -20,42 +23,6 @@ spec:
     type: Global
     global:
       rules:
-        # Each user: 1M tokens a month.
-        - clientSelectors:
-            - headers:
-                - name: x-kodo-user
-                  type: Distinct
-          limit:
-            requests: 1000000
-            unit: Month
-          shared: true
-          cost:
-            request:
-              from: Number
-              number: 0
-            response:
-              from: Metadata
-              metadata:
-                namespace: io.envoy.ai_gateway
-                key: llm_total_token
-        # Each workspace: 5M tokens a month.
-        - clientSelectors:
-            - headers:
-                - name: x-kodo-workspace
-                  type: Distinct
-          limit:
-            requests: 5000000
-            unit: Month
-          shared: true
-          cost:
-            request:
-              from: Number
-              number: 0
-            response:
-              from: Metadata
-              metadata:
-                namespace: io.envoy.ai_gateway
-                key: llm_total_token
         # Each user: 60 calls a minute.
         - clientSelectors:
             - headers:
