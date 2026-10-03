@@ -380,6 +380,11 @@ tasks:
     cmds:
       - test/e2e/examples.sh
 
+  k3s:admin-test:
+    desc: Check administration end to end on hiddenfield.dev as carol, the platform admin (switches the agent to the simulator for one turn)
+    cmds:
+      - test/e2e/admin.sh
+
   k3s:identity-test:
     desc: Log in through the hiddenfield.dev gateway as the test users and check identity, TLS and sharing
     cmds:
