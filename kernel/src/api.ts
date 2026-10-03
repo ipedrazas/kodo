@@ -601,6 +601,11 @@ async function sessions(
     onlyTurn();
     return json(201, sessionResult(await session.addMessage(agentMessage(await readJson(request)))));
   }
+  // Model calls, runs and drafts act in the workspace: only while the
+  // session's owner is still a member who may create there.
+  if ((sub === "complete" || sub === "runs" || sub === "drafts") && arg === undefined && !isAdmin(caller)) {
+    if (!creates(await ws.role(info.owner.email))) throw new ApiError(403, `the chat's owner is no longer a member of ${workspace}`);
+  }
   if (sub === "complete" && arg === undefined && method === "POST") {
     const body = await readJson(request);
     if (typeof body.model !== "string" || !/^[a-z0-9][a-z0-9._-]{0,62}$/.test(body.model)) {

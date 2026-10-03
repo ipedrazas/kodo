@@ -261,7 +261,7 @@ async function startIdentityProvider() {
   const token = (claims, { signWith = "key", alg = "RS256" } = {}) => {
     const now = Math.floor(Date.now() / 1000);
     const header = b64({ alg, kid: "test-key", typ: "JWT" });
-    const payload = b64({ iss: ISSUER, aud: AUDIENCE, iat: now, exp: now + 300, ...claims });
+    const payload = b64({ iss: ISSUER, aud: AUDIENCE, iat: now, exp: now + 300, email_verified: true, ...claims });
     if (alg === "none") return `${header}.${payload}.`;
     const signer = signWith === "other" ? other.privateKey : key.privateKey;
     return `${header}.${payload}.${sign("sha256", Buffer.from(`${header}.${payload}`), signer).toString("base64url")}`;

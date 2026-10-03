@@ -52,10 +52,16 @@ describe("platform admins", () => {
     assert.equal(ok(await kernel.api("GET", "/whoami", undefined, { as: "alice" })).platformAdmin, undefined);
   });
 
-  test("a bootstrap email the IdP says is unverified does not", async () => {
-    const unverified = as("root", { email_verified: false });
-    assert.equal(ok(await kernel.api("GET", "/whoami", undefined, { as: unverified })).platformAdmin, undefined);
-    assert.equal((await kernel.api("GET", "/admin/overview", undefined, { as: unverified })).status, 403);
+  test("a bootstrap email the IdP has not verified does not", async () => {
+    for (const claims of [{ email_verified: false }, { email_verified: undefined }]) {
+      const unverified = as("root", claims);
+      assert.equal(ok(await kernel.api("GET", "/whoami", undefined, { as: unverified })).platformAdmin, undefined);
+      assert.equal((await kernel.api("GET", "/admin/overview", undefined, { as: unverified })).status, 403);
+    }
+    // Nor does an unverified email carry anyone's workspace role.
+    const fake = as("mallory", { email: "alice@test", email_verified: false });
+    assert.equal(ok(await kernel.api("GET", "/whoami", undefined, { as: fake })).email, "");
+    assert.equal((await kernel.api("POST", "/workspaces/team/cells", { blueprint: "fixture" }, { as: fake })).status, 403);
   });
 
   test("anyone else gets 403 on every admin endpoint and the dashboard", async () => {
@@ -193,6 +199,11 @@ describe("workspace members and admins", () => {
     assert.equal((await kernel.api("POST", "/workspaces/lab/cells", { blueprint: "fixture" }, { as: "bob" })).status, 403);
     const turn = await kernel.api("POST", `/workspaces/lab/sessions/${session.id}/turns`, { content: "hi" }, { as: "bob" });
     assert.equal(turn.status, 403);
+    // Nor run code or call models through the chat without a turn.
+    const run = await kernel.api("POST", `/workspaces/lab/sessions/${session.id}/runs`, { code: "return 1" }, { as: "bob" });
+    assert.equal(run.status, 403);
+    const complete = await kernel.api("POST", `/workspaces/lab/sessions/${session.id}/complete`, { model: "agent", request: {} }, { as: "bob" });
+    assert.equal(complete.status, 403);
   });
 
   test("the admin dashboard lists workspaces with their admins", async () => {

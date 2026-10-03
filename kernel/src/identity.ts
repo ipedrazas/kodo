@@ -44,21 +44,23 @@ export async function identify(request: Request, env: Env): Promise<Caller> {
   }
   const claims = await verifyJwt(token, config);
   if (typeof claims.sub !== "string" || !claims.sub) throw new IdentityError("token has no subject");
-  const email = typeof claims.email === "string" ? claims.email.toLowerCase() : "";
+  // Shares and workspace roles are keyed by email, so an email the IdP says
+  // is unverified is not used at all.
+  const email = typeof claims.email === "string" && claims.email_verified !== false ? claims.email.toLowerCase() : "";
   const caller: Caller = { kind: "user", user: claims.sub, email };
   if (isPlatformAdmin(claims, email, config)) caller.platformAdmin = true;
   return caller;
 }
 
 // Whether a verified token names a platform admin: a member of the
-// configured group, or one of the bootstrap emails, if the IdP has not said
-// the email is unverified.
+// configured group, or one of the bootstrap emails, which the IdP must say
+// it verified.
 function isPlatformAdmin(claims: Record<string, unknown>, email: string, config: AuthConfig): boolean {
   if (config.adminGroup) {
     const groups = claims[config.adminGroupsClaim];
     if (Array.isArray(groups) ? groups.includes(config.adminGroup) : groups === config.adminGroup) return true;
   }
-  return Boolean(email) && claims.email_verified !== false && config.adminEmails.includes(email);
+  return Boolean(email) && claims.email_verified === true && config.adminEmails.includes(email);
 }
 
 // Whether a caller may administer the platform: the operator's admin token,
