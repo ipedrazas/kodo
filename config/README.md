@@ -82,6 +82,8 @@ spec:
 
 The spec is immutable, like the version it publishes. Re-applying the same source is a no-op; publishing a version that already exists with a different bundle sets `Published=False` with reason `Conflict`.
 
+Deleting the resource withdraws its version (finalizer `kodo.dev/withdraw`): no new cell can use it, and cells already on it keep running. Nothing is withdrawn for a version the resource did not publish, or that another published resource also publishes, and deletion does not wait for a Fleet that is gone or being deleted; while the fleet is down, it retries. Applying the same source again restores the version.
+
 ## Workspace
 
 ```yaml

@@ -88,11 +88,20 @@ rules:
   - kodo.dev
   resources:
   - blueprints
-  - workspaces
+  - fleets
   verbs:
   - get
   - list
+  - patch
+  - update
   - watch
+- apiGroups:
+  - kodo.dev
+  resources:
+  - blueprints/finalizers
+  - fleets/finalizers
+  verbs:
+  - update
 - apiGroups:
   - kodo.dev
   resources:
@@ -106,19 +115,11 @@ rules:
 - apiGroups:
   - kodo.dev
   resources:
-  - fleets
+  - workspaces
   verbs:
   - get
   - list
-  - patch
-  - update
   - watch
-- apiGroups:
-  - kodo.dev
-  resources:
-  - fleets/finalizers
-  verbs:
-  - update
 - apiGroups:
   - networking.k8s.io
   resources:
