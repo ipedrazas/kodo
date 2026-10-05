@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	ctrlmgr "sigs.k8s.io/controller-runtime"
 
@@ -41,15 +42,22 @@ func kernelTarget(ctx context.Context, c ctrl.Client, namespace, fleet string) (
 	return kernelapi.Target{Namespace: namespace, Service: fleet, AdminToken: string(secret.Data["token"])}, nil
 }
 
+// BlueprintFinalizer withdraws a deleted Blueprint's version from its
+// Fleet's catalog, so no new cell can use it; cells already on it keep
+// running.
+const BlueprintFinalizer = "kodo.dev/withdraw"
+
 // BlueprintReconciler publishes each Blueprint resource to its Fleet's
-// catalog, as `POST /api/bundles` and `PUT /api/blueprints/...` would.
+// catalog, as `POST /api/bundles` and `PUT /api/blueprints/...` would, and
+// withdraws it when the resource is deleted.
 type BlueprintReconciler struct {
 	ctrl.Client
 	Kernel Kernel
 }
 
-// +kubebuilder:rbac:groups=kodo.dev,resources=blueprints,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kodo.dev,resources=blueprints,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=kodo.dev,resources=blueprints/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=kodo.dev,resources=blueprints/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services/proxy,verbs=get;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create
@@ -58,6 +66,14 @@ func (r *BlueprintReconciler) Reconcile(ctx context.Context, req ctrlmgr.Request
 	var bp kodov1.Blueprint
 	if err := r.Get(ctx, req.NamespacedName, &bp); err != nil {
 		return ctrlmgr.Result{}, ctrl.IgnoreNotFound(err)
+	}
+	if !bp.DeletionTimestamp.IsZero() {
+		return r.finalize(ctx, &bp)
+	}
+	if controllerutil.AddFinalizer(&bp, BlueprintFinalizer) {
+		if err := r.Update(ctx, &bp); err != nil {
+			return ctrlmgr.Result{}, err
+		}
 	}
 	if c := meta.FindStatusCondition(bp.Status.Conditions, ConditionPublished); c != nil &&
 		c.Status == metav1.ConditionTrue && c.ObservedGeneration == bp.Generation {
@@ -125,40 +141,111 @@ func (r *BlueprintReconciler) publish(ctx context.Context, bp *kodov1.Blueprint)
 	case res.Status == http.StatusConflict:
 		// Already published: fine if it is the same bundle, e.g. after an
 		// operator restart; a conflict if the source changed.
-		existing, err := r.publishedDigest(ctx, target, bp)
+		existing, status, err := r.publishedVersion(ctx, target, bp)
 		if err != nil {
 			return uploaded.Digest, false, "FleetUnavailable", err.Error(), nil
 		}
-		if existing == uploaded.Digest {
-			return uploaded.Digest, true, "Published", fmt.Sprintf("%s %s published", bp.Spec.Blueprint, bp.Spec.Version), nil
+		if existing != uploaded.Digest {
+			return uploaded.Digest, false, "Conflict",
+				fmt.Sprintf("%s %s is already published with bundle %s; versions are immutable", bp.Spec.Blueprint, bp.Spec.Version, existing), nil
 		}
-		return uploaded.Digest, false, "Conflict",
-			fmt.Sprintf("%s %s is already published with bundle %s; versions are immutable", bp.Spec.Blueprint, bp.Spec.Version, existing), nil
+		// The same version applied again after its resource was deleted,
+		// which withdrew it: restore it.
+		if status == "withdrawn" {
+			res, err := call(http.MethodPost, path+"/restore", nil)
+			if err != nil {
+				return uploaded.Digest, false, "FleetUnavailable", err.Error(), nil
+			}
+			if !res.OK() {
+				return uploaded.Digest, false, "Rejected", res.Error(), nil
+			}
+			return uploaded.Digest, true, "Published", fmt.Sprintf("%s %s restored", bp.Spec.Blueprint, bp.Spec.Version), nil
+		}
+		return uploaded.Digest, true, "Published", fmt.Sprintf("%s %s published", bp.Spec.Blueprint, bp.Spec.Version), nil
 	default:
 		return uploaded.Digest, false, "Rejected", res.Error(), nil
 	}
 }
 
-func (r *BlueprintReconciler) publishedDigest(ctx context.Context, target kernelapi.Target, bp *kodov1.Blueprint) (string, error) {
+// publishedVersion is the bundle and status ("published", "withdrawn") of
+// the Blueprint's version in the catalog.
+func (r *BlueprintReconciler) publishedVersion(ctx context.Context, target kernelapi.Target, bp *kodov1.Blueprint) (bundle, status string, err error) {
 	res, err := r.Kernel.Do(ctx, target, http.MethodGet, "/blueprints/"+bp.Spec.Blueprint, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var body struct {
 		Versions []struct {
 			Version string `json:"version"`
 			Bundle  string `json:"bundle"`
+			Status  string `json:"status"`
 		} `json:"versions"`
 	}
 	if err := res.Decode(&body); err != nil {
-		return "", fmt.Errorf("reading %s: %w", bp.Spec.Blueprint, err)
+		return "", "", fmt.Errorf("reading %s: %w", bp.Spec.Blueprint, err)
 	}
 	for _, v := range body.Versions {
 		if v.Version == bp.Spec.Version {
-			return v.Bundle, nil
+			return v.Bundle, v.Status, nil
 		}
 	}
-	return "", fmt.Errorf("%s %s is not listed", bp.Spec.Blueprint, bp.Spec.Version)
+	return "", "", fmt.Errorf("%s %s is not listed", bp.Spec.Blueprint, bp.Spec.Version)
+}
+
+// finalize withdraws a deleted Blueprint's version, then lets the resource
+// go. Nothing is withdrawn for a version this resource did not publish (it
+// failed, or conflicted with another bundle) or that another resource still
+// publishes, and nothing waits on a Fleet that is gone or going.
+func (r *BlueprintReconciler) finalize(ctx context.Context, bp *kodov1.Blueprint) (ctrlmgr.Result, error) {
+	if !controllerutil.ContainsFinalizer(bp, BlueprintFinalizer) {
+		return ctrlmgr.Result{}, nil
+	}
+	withdraw, err := r.shouldWithdraw(ctx, bp)
+	if err != nil {
+		return ctrlmgr.Result{}, err
+	}
+	if withdraw {
+		target, err := kernelTarget(ctx, r.Client, bp.Namespace, bp.Spec.Fleet)
+		if err != nil {
+			return ctrlmgr.Result{RequeueAfter: retryAfter}, nil
+		}
+		path := fmt.Sprintf("/blueprints/%s/%s/withdraw", bp.Spec.Blueprint, bp.Spec.Version)
+		res, err := r.Kernel.Do(ctx, target, http.MethodPost, path, nil)
+		if err != nil {
+			return ctrlmgr.Result{RequeueAfter: retryAfter}, nil
+		}
+		// 404: the catalog no longer has it; 409: already withdrawn.
+		if !res.OK() && res.Status != http.StatusNotFound && res.Status != http.StatusConflict {
+			return ctrlmgr.Result{}, fmt.Errorf("withdrawing %s %s: %d %s", bp.Spec.Blueprint, bp.Spec.Version, res.Status, res.Error())
+		}
+	}
+	controllerutil.RemoveFinalizer(bp, BlueprintFinalizer)
+	return ctrlmgr.Result{}, r.Update(ctx, bp)
+}
+
+func (r *BlueprintReconciler) shouldWithdraw(ctx context.Context, bp *kodov1.Blueprint) (bool, error) {
+	if c := meta.FindStatusCondition(bp.Status.Conditions, ConditionPublished); c == nil || c.Status != metav1.ConditionTrue {
+		return false, nil
+	}
+	var fleet kodov1.Fleet
+	if err := r.Get(ctx, ctrl.ObjectKey{Namespace: bp.Namespace, Name: bp.Spec.Fleet}, &fleet); err != nil {
+		return false, ctrl.IgnoreNotFound(err)
+	}
+	if !fleet.DeletionTimestamp.IsZero() {
+		return false, nil
+	}
+	var all kodov1.BlueprintList
+	if err := r.List(ctx, &all, ctrl.InNamespace(bp.Namespace)); err != nil {
+		return false, err
+	}
+	for _, other := range all.Items {
+		if other.Name != bp.Name && other.DeletionTimestamp.IsZero() &&
+			other.Spec.Fleet == bp.Spec.Fleet && other.Spec.Blueprint == bp.Spec.Blueprint && other.Spec.Version == bp.Spec.Version &&
+			meta.IsStatusConditionTrue(other.Status.Conditions, ConditionPublished) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (r *BlueprintReconciler) SetupWithManager(mgr ctrlmgr.Manager) error {

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -114,6 +116,121 @@ func TestBlueprintRetriesWhileFleetIsDown(t *testing.T) {
 	bp, res := publishBlueprint(t, &fakeKernel{err: errors.New("fleet not ready")})
 	if c := published(bp); c == nil || c.Reason != "FleetUnavailable" || res.RequeueAfter == 0 {
 		t.Fatalf("condition %+v requeue %v", c, res.RequeueAfter)
+	}
+}
+
+func TestBlueprintAddsFinalizer(t *testing.T) {
+	bp, _ := publishBlueprint(t, &fakeKernel{answers: map[string]kernelapi.Response{
+		"POST /bundles":           answer(201, `{"digest":"`+digest+`"}`),
+		"PUT /blueprints/notes/1": answer(201, `{}`),
+	}})
+	if !slices.Contains(bp.Finalizers, BlueprintFinalizer) {
+		t.Fatalf("finalizers %v", bp.Finalizers)
+	}
+}
+
+func TestBlueprintRestoresAWithdrawnVersion(t *testing.T) {
+	kernel := &fakeKernel{answers: map[string]kernelapi.Response{
+		"POST /bundles":                    answer(201, `{"digest":"`+digest+`"}`),
+		"PUT /blueprints/notes/1":          answer(409, `{"error":"notes 1 is already published"}`),
+		"GET /blueprints/notes":            answer(200, `{"versions":[{"version":"1","bundle":"`+digest+`","status":"withdrawn"}]}`),
+		"POST /blueprints/notes/1/restore": answer(200, `{}`),
+	}}
+	bp, _ := publishBlueprint(t, kernel)
+	if c := published(bp); c == nil || c.Status != metav1.ConditionTrue || c.Message != "notes 1 restored" {
+		t.Fatalf("condition %+v", c)
+	}
+	if !slices.Contains(kernel.calls, "POST /blueprints/notes/1/restore") {
+		t.Fatalf("calls %v", kernel.calls)
+	}
+}
+
+// deletedBlueprint is a Blueprint being deleted, which published its version
+// or not.
+func deletedBlueprint(publishedOK bool) *kodov1.Blueprint {
+	now := metav1.Now()
+	bp := &kodov1.Blueprint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "notes-1", Namespace: "kodo", Generation: 1,
+			DeletionTimestamp: &now, Finalizers: []string{BlueprintFinalizer},
+		},
+		Spec: kodov1.BlueprintSpec{Fleet: "kodo", Blueprint: "notes", Version: "1"},
+	}
+	if publishedOK {
+		setCondition(&bp.Status.Conditions, 1, ConditionPublished, true, "Published", "notes 1 published")
+	} else {
+		setCondition(&bp.Status.Conditions, 1, ConditionPublished, false, "Conflict", "another bundle")
+	}
+	return bp
+}
+
+func finalizeBlueprint(t *testing.T, kernel *fakeKernel, bp *kodov1.Blueprint, objs ...client.Object) (bool, ctrl.Result) {
+	t.Helper()
+	objs = append(objs, bp)
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).WithStatusSubresource(&kodov1.Blueprint{}).Build()
+	r := &BlueprintReconciler{Client: c, Kernel: kernel}
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bp)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got kodov1.Blueprint
+	err = c.Get(context.Background(), client.ObjectKeyFromObject(bp), &got)
+	if err != nil && !apierrors.IsNotFound(err) {
+		t.Fatal(err)
+	}
+	return apierrors.IsNotFound(err), res
+}
+
+func kodoFleet() *kodov1.Fleet {
+	return &kodov1.Fleet{ObjectMeta: metav1.ObjectMeta{Name: "kodo", Namespace: "kodo"}}
+}
+
+const withdraw = "POST /blueprints/notes/1/withdraw"
+
+func TestBlueprintDeletionWithdraws(t *testing.T) {
+	for _, status := range []int{200, 404, 409} {
+		kernel := &fakeKernel{answers: map[string]kernelapi.Response{withdraw: answer(status, `{}`)}}
+		gone, _ := finalizeBlueprint(t, kernel, deletedBlueprint(true), kodoFleet(), adminToken())
+		if !gone || !slices.Equal(kernel.calls, []string{withdraw}) {
+			t.Errorf("kernel answers %d: gone %v, calls %v", status, gone, kernel.calls)
+		}
+	}
+}
+
+func TestBlueprintDeletionKeepsWhatItDidNotPublish(t *testing.T) {
+	kernel := &fakeKernel{}
+	gone, _ := finalizeBlueprint(t, kernel, deletedBlueprint(false), kodoFleet(), adminToken())
+	if !gone || len(kernel.calls) != 0 {
+		t.Fatalf("gone %v, calls %v", gone, kernel.calls)
+	}
+}
+
+func TestBlueprintDeletionKeepsAVersionAnotherResourcePublishes(t *testing.T) {
+	other := &kodov1.Blueprint{
+		ObjectMeta: metav1.ObjectMeta{Name: "notes-1-copy", Namespace: "kodo"},
+		Spec:       kodov1.BlueprintSpec{Fleet: "kodo", Blueprint: "notes", Version: "1"},
+	}
+	setCondition(&other.Status.Conditions, 1, ConditionPublished, true, "Published", "notes 1 published")
+	kernel := &fakeKernel{}
+	gone, _ := finalizeBlueprint(t, kernel, deletedBlueprint(true), kodoFleet(), adminToken(), other)
+	if !gone || len(kernel.calls) != 0 {
+		t.Fatalf("gone %v, calls %v", gone, kernel.calls)
+	}
+}
+
+func TestBlueprintDeletionDoesNotWaitForAFleetThatIsGone(t *testing.T) {
+	kernel := &fakeKernel{}
+	gone, _ := finalizeBlueprint(t, kernel, deletedBlueprint(true))
+	if !gone || len(kernel.calls) != 0 {
+		t.Fatalf("gone %v, calls %v", gone, kernel.calls)
+	}
+}
+
+func TestBlueprintDeletionRetriesWhileFleetIsDown(t *testing.T) {
+	kernel := &fakeKernel{err: errors.New("fleet not ready")}
+	gone, res := finalizeBlueprint(t, kernel, deletedBlueprint(true), kodoFleet(), adminToken())
+	if gone || res.RequeueAfter == 0 {
+		t.Fatalf("gone %v, requeue %v", gone, res.RequeueAfter)
 	}
 }
 
