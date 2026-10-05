@@ -136,3 +136,17 @@ async onApproval(approval) {
 ## Publishing
 
 A gadget is published as a version of a Blueprint through the kernel API; see the [README](README.md#api). A version is immutable. Existing cells keep the version they were created with until they are moved to another, and a move keeps the gadget's storage, so a new version must read the data the old one wrote.
+
+## From a celld project
+
+A Durable Object class of a celld (Wrangler) project can run as a gadget unchanged. `kodo publish` (in `cmd/kodo`) bundles one class behind a generated `App` that extends `DurableObject`, checks it, and publishes it as a Blueprint through the operator with kubectl:
+
+```sh
+go build -o bin/kodo ./cmd/kodo
+(cd my-app && npm install)
+bin/kodo publish my-app --class Counter --version 0.1.0   # --dry-run writes the manifests only
+```
+
+The class gets the cell's state, so `state.storage` is the cell's own database, and is reached at `https://<cell>.g.<domain>/` behind the usual login and sharing. The Worker's router and its other classes are left behind: the kernel routes each cell's hostname to its gadget, so what the router did with `idFromName(name)` becomes one cell per name. Only `fetch` is passed on.
+
+`kodo publish` refuses a class that uses `env` bindings or secrets, imports other `cloudflare:` or `node:` modules, sets native alarms or accepts WebSockets, and says why. The class's `env` has no bindings: one it reaches for in a way the checks miss throws when the class runs, and outbound `fetch()` throws as in any gadget. A class that needs those is rewritten against the `Gadget` contract above: grants for the network and models, `this.setAlarm()` and `onMessage()`.

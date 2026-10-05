@@ -1,0 +1,18 @@
+// A celld project for the tests: one class that runs as a gadget, ones that
+// cannot, and a binding to another Worker's class, which is not its own.
+{
+  "name": "celld-lab",
+  "main": "src/index.ts", // comments and trailing commas, as Wrangler allows
+  /* "main": "src/other.ts", */
+  "durable_objects": {
+    "bindings": [
+      { "name": "COUNTERS", "class_name": "Counter" },
+      { "name": "SETTINGS", "class_name": "Settings" },
+      { "name": "SECRETS", "class_name": "Secret" },
+      { "name": "REMINDERS", "class_name": "Reminder" },
+      { "name": "TUNNELS", "class_name": "Tunnel" },
+      { "name": "REMOTE", "class_name": "Remote", "script_name": "other-worker" },
+    ],
+  },
+  "vars": { "GREETING": "https://example.com//not-a-comment" },
+}
