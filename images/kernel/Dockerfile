@@ -4,7 +4,7 @@
 # the identity settings scripts/deploy.sh reads, it deploys the kernel; the
 # fleet's nodes adopt it without restarting.
 # Build from the repository root: docker build -f images/kernel/Dockerfile .
-ARG CELLD_IMAGE=ghcr.io/denoland/celld:0.6.0
+ARG CELLD_IMAGE=ghcr.io/denoland/celld:0.6.1
 ARG ESBUILD_VERSION=0.28.2
 
 FROM debian:bookworm-slim AS esbuild

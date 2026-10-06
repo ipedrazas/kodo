@@ -120,7 +120,7 @@ spec:
                 type: object
               celld:
                 description: |-
-                  Celld is the celld node image, e.g. ghcr.io/denoland/celld:0.6.0.
+                  Celld is the celld node image, e.g. ghcr.io/denoland/celld:0.6.1.
                   Changing it stops every node before starting the new version, because
                   mixed celld versions cannot share a fleet.
                 type: string

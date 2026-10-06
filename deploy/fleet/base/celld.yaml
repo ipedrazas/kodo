@@ -55,7 +55,7 @@ spec:
               app: celld
       containers:
         - name: celld
-          image: ghcr.io/denoland/celld:0.6.0
+          image: ghcr.io/denoland/celld:0.6.1
           args:
             # celld does not accept the --flag=value form.
             - --bucket

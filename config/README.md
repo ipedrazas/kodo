@@ -26,7 +26,7 @@ Images are built by the Images workflow: `ghcr.io/ipedrazas/kodo-operator` and `
 
 ```yaml
 spec:
-  celld: ghcr.io/denoland/celld:0.6.0     # node image
+  celld: ghcr.io/denoland/celld:0.6.1     # node image
   kernel: ghcr.io/ipedrazas/kodo-kernel:main
   replicas: 3
   runtimeClassName: gvisor                # optional

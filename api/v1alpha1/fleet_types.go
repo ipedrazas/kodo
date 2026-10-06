@@ -9,7 +9,7 @@ import (
 
 // FleetSpec describes a celld fleet running the kodo kernel.
 type FleetSpec struct {
-	// Celld is the celld node image, e.g. ghcr.io/denoland/celld:0.6.0.
+	// Celld is the celld node image, e.g. ghcr.io/denoland/celld:0.6.1.
 	// Changing it stops every node before starting the new version, because
 	// mixed celld versions cannot share a fleet.
 	Celld string `json:"celld"`

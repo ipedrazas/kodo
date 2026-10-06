@@ -5,7 +5,7 @@ kind: Fleet
 metadata:
   name: kodo
 spec:
-  celld: ghcr.io/denoland/celld:0.6.0
+  celld: ghcr.io/denoland/celld:0.6.1
   kernel: ghcr.io/ipedrazas/kodo-kernel:main
   replicas: 3
   runtimeClassName: gvisor
