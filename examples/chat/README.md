@@ -13,7 +13,7 @@ A kodo gadget for a chat room: one room per cell, whose members are the people t
 - The page opens a WebSocket to its cell. `onOpen` sends it the last 50 lines and who is here, and tells the others someone came.
 - A line sent on a socket, or posted to `POST /api/lines`, is stored in the cell's SQLite database and sent to every open socket with `this.broadcast()`. `onClose` tells the others someone left. Who is here comes from `this.sockets()`.
 - The owner and editors can write. A viewer can read `GET /api/lines` but cannot open a socket, because the kernel refuses viewers' WebSockets.
-- The page sends `ping` every 30 seconds, which the kernel answers `pong` without waking the gadget, so proxies keep a quiet socket open. It reconnects, backing off up to 30 seconds, if the socket closes.
+- The page sends `ping` every 30 seconds, which the kernel answers `pong` without waking the gadget, so proxies keep a quiet socket open. It reconnects, backing off up to 30 seconds, if the socket closes or does not open within 10 seconds.
 
 ## Deploy it
 

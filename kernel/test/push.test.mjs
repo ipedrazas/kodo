@@ -247,14 +247,15 @@ describe("limits", () => {
     for (const ws of sockets) ws.close();
   });
 
-  test("a cell holds 1000 sockets, broadcasts to them in one call, and refuses the next", async () => {
+  test("a cell holds 1000 sockets, broadcasts to them in one call, and refuses the next", { timeout: 120_000 }, async () => {
     const cell = await newCell();
     const sockets = [];
-    // celld refuses a cell more than 64 requests at once, and each opening
-    // socket's onOpen calls the cell again.
+    // A few at a time: after a few thousand sockets have opened and closed
+    // on a cell, celld 0.6.0 loses the answer to some concurrent upgrades
+    // (on main too; see plans/socket-push.md).
     const logged = kernel.logs().length;
     try {
-      for (let i = 0; i < 1000; i += 25) sockets.push(...(await Promise.all(Array.from({ length: 25 }, () => open(cell)))));
+      for (let i = 0; i < 1000; i += 5) sockets.push(...(await Promise.all(Array.from({ length: 5 }, () => open(cell)))));
     } catch (err) {
       const warnings = kernel.logs().slice(logged).split("\n").filter((l) => /WARN|ERROR/.test(l) && !/allocator/.test(l));
       throw new Error(`after ${sockets.length} sockets: ${err.message}\n${warnings.slice(-20).join("\n")}`);

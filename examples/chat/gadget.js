@@ -137,7 +137,10 @@ function add(line) {
 }
 function connect() {
   ws = new WebSocket("wss://" + location.host + "/");
+  // An upgrade that is never answered is given up and tried again.
+  const opening = setTimeout(() => ws.readyState === 0 && ws.close(), 10000);
   ws.onopen = () => {
+    clearTimeout(opening);
     retry = 1000;
     status("Connected.");
     // Keeps the socket open through proxies that close quiet connections.
