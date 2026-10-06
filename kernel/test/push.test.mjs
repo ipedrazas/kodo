@@ -250,8 +250,15 @@ describe("limits", () => {
   test("a cell holds 1000 sockets, broadcasts to them in one call, and refuses the next", async () => {
     const cell = await newCell();
     const sockets = [];
-    // celld refuses a cell more than 64 requests at once.
-    for (let i = 0; i < 1000; i += 50) sockets.push(...(await Promise.all(Array.from({ length: 50 }, () => open(cell)))));
+    // celld refuses a cell more than 64 requests at once, and each opening
+    // socket's onOpen calls the cell again.
+    const logged = kernel.logs().length;
+    try {
+      for (let i = 0; i < 1000; i += 25) sockets.push(...(await Promise.all(Array.from({ length: 25 }, () => open(cell)))));
+    } catch (err) {
+      const warnings = kernel.logs().slice(logged).split("\n").filter((l) => /WARN|ERROR/.test(l) && !/allocator/.test(l));
+      throw new Error(`after ${sockets.length} sockets: ${err.message}\n${warnings.slice(-20).join("\n")}`);
+    }
     const started = Date.now();
     assert.deepEqual(await call(cell, "/broadcast", { body: "to all" }), { sent: 1000 });
     const ms = Date.now() - started;
