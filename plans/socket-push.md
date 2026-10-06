@@ -74,7 +74,7 @@ These celld 0.6.0 behaviours decide details above. Each is answered by a test, n
 2. **Socket tags:** they work, also after the cell hibernates with sockets open. Lookups use `getWebSockets(id)`.
 3. **`onOpen` timing:** `onOpen` runs in `waitUntil` after the 101; its send arrives every time.
 4. **Bursts:** 50 to 200 sockets broadcasting at once all deliver. The failures first seen were not celld's: `kernelKey()` cached a pending promise in a module variable, and on a fresh `GadgetHost` isolate the concurrent host calls that awaited it were cancelled as hung. The key alone is now cached. `Gadget.#host` likewise calls the host directly once warm, instead of chaining on the first call's promise. Separately, celld refuses a cell more than 64 requests in flight (`CELLD_MAX_CELL_REQUESTS`) with 503 `cell request limit reached`. That limits concurrent upgrades, not messages.
-5. **Idle sockets:** celld supports `setWebSocketAutoResponse`, so the cell answers `ping` with `pong` without waking. Whether Envoy keeps a quiet socket open is checked by `test/e2e/chat.sh` on k3s.
+5. **Idle sockets:** celld supports `setWebSocketAutoResponse`, so the cell answers `ping` with `pong` without waking. On k3s (`test/e2e/chat.sh`), a socket that pings every 30 s still works after 10 minutes. One that never pings is dropped by the gateway after 5 minutes without its client being told: it looks open but delivers nothing either way.
 
 Also found: after a few thousand sockets have opened and closed on one cell (about 2,400 with the push fixture, 6,000 with an echo gadget; `main` too), celld loses the 101 for some concurrent upgrades. The cell accepts the socket and lists it, but the client never gets the answer, and in CI the upgrade fails with 500 after 300 s. Upgrades one at a time still succeed, on that cell and others, and the cell keeps serving HTTP. It is a celld 0.6.0 issue to report upstream with a repro. Until then, clients should reconnect with a timeout on the open, as the chat page does.
 
@@ -106,14 +106,14 @@ Also found: celld keeps a closed socket in `getWebSockets()` with `readyState` O
 
 ## Acceptance criteria
 
-- [ ] A gadget sends on any of its cell's sockets from `fetch`, `onOpen`, `onMessage`, `onClose`, `onAlarm` and `onApproval`
-- [ ] A gadget cannot send on, list or close another cell's sockets
-- [ ] Two users in a shared chat cell see each other's lines within a second on k3s, through the gateway
-- [ ] Socket ids stay valid across gadget restarts and cell hibernation
-- [ ] A broadcast to 1000 sockets is one host call and finishes within the call time limit
-- [ ] Oversized messages, too many targets and too many sockets fail with a clear error, not a hung call
-- [ ] Pushed frames appear in the cell's usage
-- [ ] GADGETS.md, the agent's gadget guide and `kodo publish`'s refusal describe the new API
+- [x] A gadget sends on any of its cell's sockets from `fetch`, `onOpen`, `onMessage`, `onClose`, `onAlarm` and `onApproval`
+- [x] A gadget cannot send on, list or close another cell's sockets
+- [x] Two users in a shared chat cell see each other's lines within a second on k3s, through the gateway
+- [x] Socket ids stay valid across gadget restarts and cell hibernation
+- [x] A broadcast to 1000 sockets is one host call and finishes within the call time limit
+- [x] Oversized messages, too many targets and too many sockets fail with a clear error, not a hung call
+- [x] Pushed frames appear in the cell's usage
+- [x] GADGETS.md, the agent's gadget guide and `kodo publish`'s refusal describe the new API
 
 ## Open questions
 
