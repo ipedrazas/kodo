@@ -1,7 +1,9 @@
 // The socket half of test/e2e/chat.sh: alice and bob in one chat cell
 // through the gateway (wss via Envoy, logged in with their cookie jars). A
 // line from one reaches the other within a second, both ways, and a socket
-// that only pings, as the page does, is still open after QUIET_S seconds.
+// that only pings, as the page does, still works after QUIET_S seconds.
+// Bob's first socket never pings: the gateway drops a quiet stream after
+// 5 minutes without telling the client, so it is only reported on.
 //
 //   node test/e2e/chat-sockets.mjs <cell> <alice jar> <bob jar>
 // GATEWAY and DOMAIN as in lib.sh; QUIET_S (default 600) and PING_S
@@ -111,15 +113,19 @@ while (Date.now() < quietUntil) {
 clearInterval(pinger);
 await alice.next("pong", 1).catch(() => fail("alice's pings were never answered"));
 console.log(`alice's socket is open after ${QUIET_S} s`);
-if (bob.closed) {
-  console.log(`bob, who never pinged, was closed: ${JSON.stringify(bob.closed)}; rejoining`);
-  const again = await join("bob", bobJar);
-  await say(again, alice, "back after the quiet");
-  again.ws.close();
-} else {
-  console.log("bob's socket, which never pinged, is open too");
-  await say(bob, alice, "still here after the quiet");
-  bob.ws.close();
-}
+// Whether bob's socket, which never pinged, still delivers both ways.
+const silent = await Promise.allSettled([
+  (bob.ws.send(JSON.stringify({ text: "bob after the quiet" })), bob.next("line")),
+  alice.next("line"),
+]);
+const works = silent.every((r) => r.status === "fulfilled");
+console.log(`bob's socket, which never pinged: ${bob.closed ? `closed ${JSON.stringify(bob.closed)}` : works ? "still works" : "open, but delivers nothing"}`);
+bob.ws.close();
+// Alice's, which pinged, must still work: with a new socket for bob, both ways.
+const again = await join("bob", bobJar);
+await alice.next("online");
+await say(alice, again, "alice after the quiet");
+await say(again, alice, "bob back after the quiet");
+again.ws.close();
 alice.ws.close();
 console.log("chat through the gateway: ok");

@@ -36,7 +36,7 @@ ok "$(api alice PUT "/workspaces/team/cells/$room/shares/bob@$DOMAIN" '{"role":"
 echo "room $room shared with bob as editor"
 
 step "Lines through the gateway, then a quiet socket"
-GATEWAY=$GATEWAY DOMAIN=$DOMAIN node test/e2e/chat-sockets.mjs "$room" "$(jar alice)" "$(jar bob)"
+GATEWAY=$GATEWAY DOMAIN=$DOMAIN QUIET_S=${QUIET_S:-600} node test/e2e/chat-sockets.mjs "$room" "$(jar alice)" "$(jar bob)"
 
 step "Pushed frames are in the usage report"
 usage=$(ok "$(api alice GET /workspaces/team/usage)" 200 "reading usage")

@@ -70,7 +70,7 @@ async onMessage(socket, message, caller) {
 
 - A message is at most 1 MiB, and one `send` names at most 1000 sockets; a larger one throws. A broadcast is one call to the cell, whatever the number of sockets.
 - A cell holds at most 1000 sockets (`GADGET_MAX_SOCKETS`); an upgrade past that is answered 503.
-- A client keeps a quiet socket open through proxies by sending the text `ping` now and then, e.g. every 30 seconds. The kernel answers `pong` without waking the gadget, which never sees either.
+- A client keeps a quiet socket open by sending the text `ping` now and then, e.g. every 30 seconds. The kernel answers `pong` without waking the gadget, which never sees either. Without it, the gateway drops a socket after 5 minutes without traffic, and the client may not be told: its socket looks open but delivers nothing.
 - Frames a gadget sends, other than `onMessage` return values, are counted as `pushed` in the workspace's usage report.
 - A viewer cannot open a socket, so everyone on one can write.
 
