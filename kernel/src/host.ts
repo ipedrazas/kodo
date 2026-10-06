@@ -58,6 +58,19 @@ const GATEKEEPER_TIMEOUT_MS = 25_000;
 // Above the Gatekeeper's limit for a model call (120 s), so it answers first.
 export const AGENT_MODEL_TIMEOUT_MS = 130_000;
 const MAX_REQUEST_BODY = 1024 * 1024;
+// Sockets one send may name, and a socket message's size.
+export const MAX_PUSH_TARGETS = 1000;
+const MAX_PUSH_MESSAGE = MAX_REQUEST_BODY;
+
+// One of a cell's open WebSockets, as its gadget sees it.
+export interface SocketInfo {
+  socket: string;
+  user: string;
+  email: string;
+  role: string;
+  // Epoch milliseconds; null for a socket opened before the kernel kept it.
+  openedAt: number | null;
+}
 
 // Holds the kernel's signing key: created on first use, stored in this
 // object's database, shared by every node of the fleet.
@@ -72,26 +85,23 @@ export class Keys extends DurableObject<Env> {
   }
 }
 
-let signingKey: Promise<CryptoKey> | undefined;
+let signingKey: CryptoKey | undefined;
 
 // The kernel's own HMAC key, from Keys. It signs each cell's props, and,
-// with a "turn:" prefix, the agent's turn tokens.
-export function kernelKey(env: Env): Promise<CryptoKey> {
-  signingKey ??= env.KEYS.getByName("kernel")
-    .secret()
-    .then((secret) =>
-      crypto.subtle.importKey(
-        "raw",
-        Uint8Array.from(atob(secret), (c) => c.charCodeAt(0)),
-        { name: "HMAC", hash: "SHA-256" },
-        false,
-        ["sign", "verify"],
-      ),
-    )
-    .catch((err) => {
-      signingKey = undefined;
-      throw err;
-    });
+// with a "turn:" prefix, the agent's turn tokens. Only the key is shared
+// between requests, never a pending promise: a request that awaits another
+// request's I/O is cancelled as hung, which a burst of host calls on a
+// fresh isolate would otherwise hit.
+export async function kernelKey(env: Env): Promise<CryptoKey> {
+  if (signingKey) return signingKey;
+  const secret = await env.KEYS.getByName("kernel").secret();
+  signingKey = await crypto.subtle.importKey(
+    "raw",
+    Uint8Array.from(atob(secret), (c) => c.charCodeAt(0)),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"],
+  );
   return signingKey;
 }
 
@@ -194,6 +204,46 @@ export class GadgetHost extends WorkerEntrypoint<Env> {
     const [status] = await this.env.CELL.getByName(cell).queryApprovals([id]);
     return status;
   }
+
+  // The WebSockets open on this cell.
+  async sockets(props: CellProps): Promise<SocketInfo[]> {
+    return this.env.CELL.getByName(await verified(this.env, props)).gadgetSockets();
+  }
+
+  // Sends a message on some of this cell's sockets, or on all of them but
+  // `except` when `targets` is null, and answers how many it was sent on.
+  async send(props: CellProps, targets: string[] | null, message: string | ArrayBuffer, except: string[] = []): Promise<number> {
+    const cell = await verified(this.env, props);
+    if (targets !== null) socketIds(targets, "targets");
+    socketIds(except, "except");
+    let size: number;
+    if (typeof message === "string") size = new TextEncoder().encode(message).byteLength;
+    else if (message instanceof ArrayBuffer) size = message.byteLength;
+    else throw new Error("message must be a string or an ArrayBuffer");
+    if (size > MAX_PUSH_MESSAGE) throw new Error("message larger than 1 MiB");
+    return this.env.CELL.getByName(cell).pushToSockets(targets, message, except);
+  }
+
+  // Closes one of this cell's sockets; answers whether it was open.
+  async closeSocket(props: CellProps, socket: string, code = 1000, reason = ""): Promise<boolean> {
+    const cell = await verified(this.env, props);
+    if (typeof socket !== "string") throw new Error("socket must be a string");
+    if (!Number.isInteger(code) || (code !== 1000 && (code < 3000 || code > 4999))) {
+      throw new Error("close code must be 1000 or 3000-4999");
+    }
+    if (typeof reason !== "string" || new TextEncoder().encode(reason).byteLength > 123) {
+      throw new Error("close reason must be a string of at most 123 bytes");
+    }
+    return this.env.CELL.getByName(cell).closeGadgetSocket(socket, code, reason);
+  }
+}
+
+// Checks a list of socket ids a gadget passed.
+function socketIds(ids: unknown, what: string): void {
+  if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string")) {
+    throw new Error(`${what} must be a list of socket ids`);
+  }
+  if (ids.length > MAX_PUSH_TARGETS) throw new Error(`${what} names more than ${MAX_PUSH_TARGETS} sockets`);
 }
 
 // An answer from the Gatekeeper, with the body base64-encoded, and what the
@@ -383,12 +433,15 @@ export class Gadget extends DurableObject {
 
   // Every call to the host goes through here. On a freshly loaded gadget,
   // celld 0.6.0 hangs a burst of concurrent host calls, so the first call
-  // goes alone and the others wait for it; after that they run concurrently.
+  // goes alone and the others wait for it; after that they run concurrently,
+  // each straight to the host: one chained on a promise of an earlier event,
+  // e.g. another socket's onMessage, could be cancelled as hung.
   #host(fn) {
+    if (this.#warm === true) return fn(this.env.KODO, this.ctx.props);
     if (this.#warm) return this.#warm.then(() => fn(this.env.KODO, this.ctx.props));
     const first = fn(this.env.KODO, this.ctx.props);
     this.#warm = first.then(
-      () => {},
+      () => { this.#warm = true; },
       () => { this.#warm = undefined; },
     );
     return first;
@@ -426,6 +479,34 @@ export class Gadget extends DurableObject {
     return toApproval(await this.#host((host, props) => host.approval(props, id)));
   }
 
+  // The WebSockets open on this cell now: [{socket, user, email, role,
+  // openedAt}]. A socket's id stays valid until it closes, across restarts
+  // of the gadget and hibernation of the cell.
+  async sockets() {
+    const list = await this.#host((host, props) => host.sockets(props));
+    return list.map((s) => Object.freeze({ ...s, openedAt: s.openedAt === null ? null : new Date(s.openedAt) }));
+  }
+
+  // Sends a string or ArrayBuffer on one socket, or on each of a list.
+  // Resolves to how many it was sent on: a socket that has closed, or an id
+  // that is not this cell's, is skipped.
+  send(socket, message) {
+    const targets = Array.isArray(socket) ? socket : [socket];
+    return this.#host((host, props) => host.send(props, targets, message, []));
+  }
+
+  // Sends on every open socket of the cell but \`except\` (a socket or a
+  // list). Resolves to how many it was sent on.
+  broadcast(message, { except = [] } = {}) {
+    const skip = Array.isArray(except) ? except : [except];
+    return this.#host((host, props) => host.send(props, null, message, skip));
+  }
+
+  // Closes one socket; onClose follows. Resolves to whether it was open.
+  closeSocket(socket, code = 1000, reason = "") {
+    return this.#host((host, props) => host.closeSocket(props, socket, code, reason));
+  }
+
   // Called by the cell to measure the gadget's database for usage reports.
   __kodoStorageBytes() {
     return this.ctx.storage.sql.databaseSize;
@@ -434,6 +515,19 @@ export class Gadget extends DurableObject {
   // Called by the cell when an approval this cell is waiting on settles.
   async __kodoApprovalSettled(status) {
     if (typeof this.onApproval === "function") await this.onApproval(toApproval(status));
+  }
+
+  // Called by the cell once a WebSocket to it has opened. A failure in
+  // onOpen is answered, not thrown, so the cell can tell it from a gadget
+  // that does not extend Gadget.
+  async __kodoOpened(socket, caller) {
+    if (typeof this.onOpen !== "function") return {};
+    try {
+      await this.onOpen(socket, caller);
+      return {};
+    } catch (err) {
+      return { failed: err instanceof Error ? err.message : String(err) };
+    }
   }
 }
 `;

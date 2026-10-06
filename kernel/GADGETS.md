@@ -30,8 +30,13 @@ A class that extends `DurableObject` from `cloudflare:workers` also runs, but ca
 | `this.setAlarm(when)` | Asks the cell to call `onAlarm()` at `when`, a `Date` or epoch milliseconds. Replaces any earlier alarm. |
 | `this.deleteAlarm()` | Cancels the alarm. |
 | `onAlarm()` | Optional. Called when the alarm fires. |
-| `onMessage(socket, message, caller)` | Optional. A message on a WebSocket to the cell. A string or `ArrayBuffer` return value is sent back on the same socket. `socket` is an opaque id; `caller` is `{user, email, role}` of whoever opened it. |
+| `onOpen(socket, caller)` | Optional. A WebSocket to the cell opened. Called once the upgrade is answered, so a send from it reaches the new socket. `socket` is an opaque id; `caller` is `{user, email, role}` of whoever opened it. |
+| `onMessage(socket, message, caller)` | Optional. A message on a WebSocket to the cell. A string or `ArrayBuffer` return value is sent back on the same socket, after anything the handler sent. |
 | `onClose(socket, code, reason)` | Optional. A WebSocket to the cell closed. |
+| `this.sockets()` | The sockets open on the cell now: `[{socket, user, email, role, openedAt}]`, `openedAt` a `Date`. |
+| `this.send(socket, message)` | Sends a string or `ArrayBuffer` on one socket, or on each of a list. Resolves to how many it was sent on: a socket that has closed, or an id that is not this cell's, is skipped. |
+| `this.broadcast(message, {except})` | Sends on every open socket of the cell but `except`, a socket or a list. Resolves to how many it was sent on. |
+| `this.closeSocket(socket, code, reason)` | Closes one socket, by default with 1000; `onClose` follows. Resolves to whether it was open. |
 | `this.grants` | One binding per capability the cell's owner granted, keyed by the capability, e.g. `this.grants["github:repo/acme/api:read"]`. Empty until the owner grants something. See [Capabilities](#capabilities). |
 | `onApproval(approval)` | Optional. A call that waited for the owner's approval has settled. See [Approvals](#approvals). |
 | `this.approval(id)` | The state of one of this cell's approvals, now. |
@@ -45,8 +50,29 @@ A class that extends `DurableObject` from `cloudflare:workers` also runs, but ca
 - **See other bindings.** `this.env` holds only `KODO`, which `Gadget` uses to talk to its cell; every call on it is checked against the cell's signed identity, so a gadget can act only for its own cell.
 - **Hold a WebSocket itself** or **set a native alarm.** celld 0.6.0 supports neither inside a gadget, so the cell holds both and passes the events on.
 - **Send, write or delete without its owner.** Every such call waits until the cell's owner approves it; see [Approvals](#approvals).
-- **Push to a socket unprompted.** A gadget can answer a message, but cannot yet send on a socket from `fetch()` or `onAlarm()`.
 - **Run for long.** Each call must answer within 30 s and use at most 5 s of CPU (`GADGET_CALL_TIMEOUT_MS`, `GADGET_CPU_MS`). A call over either limit fails; the gadget restarts on the next call with its storage intact.
+
+## Sockets
+
+The cell holds every WebSocket to it, and the gadget sends on them by id, from any handler: `fetch`, `onOpen`, `onMessage`, `onClose`, `onAlarm` or `onApproval`. A chat is:
+
+```js
+onOpen(socket, caller) {
+  return this.send(socket, JSON.stringify({ history: this.recent() }));
+}
+async onMessage(socket, message, caller) {
+  const line = this.add(caller.email, String(message));
+  await this.broadcast(JSON.stringify({ line }));
+}
+```
+
+[`examples/chat`](../examples/chat/README.md) is the whole of it. A gadget reaches only its own cell's sockets. A socket's id stays valid until it closes, across restarts of the gadget and hibernation of the cell, so a gadget may keep ids in its database. Who is connected is `this.sockets()`; presence is the gadget's to build from it.
+
+- A message is at most 1 MiB, and one `send` names at most 1000 sockets; a larger one throws. A broadcast is one call to the cell, whatever the number of sockets.
+- A cell holds at most 1000 sockets (`GADGET_MAX_SOCKETS`); an upgrade past that is answered 503.
+- A client keeps a quiet socket open through proxies by sending the text `ping` now and then, e.g. every 30 seconds. The kernel answers `pong` without waking the gadget, which never sees either.
+- Frames a gadget sends, other than `onMessage` return values, are counted as `pushed` in the workspace's usage report.
+- A viewer cannot open a socket, so everyone on one can write.
 
 ## Capabilities
 
@@ -126,6 +152,9 @@ async onApproval(approval) {
 | The gadget throws, fails to load, or has no `App` | HTTP 502 `gadget failed: ...` |
 | A call takes longer than the time limit | HTTP 504 |
 | `onMessage` throws or is missing | The socket closes with code 4011 |
+| `onOpen` throws or does not answer in time | The socket closes with code 4011 |
+| The cell already holds `GADGET_MAX_SOCKETS` sockets | The upgrade is answered 503 |
+| A send over 1 MiB, or to more than 1000 sockets | `send` or `broadcast` throws; nothing is sent |
 | `onAlarm` throws | Logged; the alarm is not retried |
 | A binding's call is outside its grant, or the owner has not connected the provider | The binding answers 403, `x-kodo-decision: denied` |
 | The fleet has no Gatekeeper, or it is unreachable | The binding answers 503 or 502, `x-kodo-decision: error` |
@@ -149,4 +178,4 @@ bin/kodo publish my-app --class Counter --version 0.1.0   # --dry-run writes the
 
 The class gets the cell's state, so `state.storage` is the cell's own database, and is reached at `https://<cell>.g.<domain>/` behind the usual login and sharing. The Worker's router and its other classes are left behind: the kernel routes each cell's hostname to its gadget, so what the router did with `idFromName(name)` becomes one cell per name. Only `fetch` is passed on.
 
-`kodo publish` refuses a class that uses `env` bindings or secrets, imports other `cloudflare:` or `node:` modules, sets native alarms or accepts WebSockets, and says why. The class's `env` has no bindings: one it reaches for in a way the checks miss throws when the class runs, and outbound `fetch()` throws as in any gadget. A class that needs those is rewritten against the `Gadget` contract above: grants for the network and models, `this.setAlarm()` and `onMessage()`.
+`kodo publish` refuses a class that uses `env` bindings or secrets, imports other `cloudflare:` or `node:` modules, sets native alarms or accepts WebSockets, and says why. The class's `env` has no bindings: one it reaches for in a way the checks miss throws when the class runs, and outbound `fetch()` throws as in any gadget. A class that needs those is rewritten against the `Gadget` contract above: grants for the network and models, `this.setAlarm()`, and `onOpen()`, `onMessage()`, `this.send()` and `this.broadcast()` for sockets.

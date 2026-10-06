@@ -7,6 +7,8 @@
     "GADGET_CALL_TIMEOUT_MS": "30000",
     // CPU time a gadget may use per call.
     "GADGET_CPU_MS": "5000",
+    // WebSockets one cell holds at once; an upgrade past it is a 503.
+    "GADGET_MAX_SOCKETS": "1000",
     // Each run of the agent's code: how long it may take, the CPU time it
     // may use (every run on a node shares one isolate, so a runaway run
     // holds up the others for this long), and how many capability calls it

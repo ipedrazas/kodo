@@ -16,6 +16,7 @@ export interface Env {
   PLATFORM: DurableObjectNamespace<Platform>;
   GADGET_CALL_TIMEOUT_MS: string;
   GADGET_CPU_MS: string;
+  GADGET_MAX_SOCKETS?: string;
   // Limits on each run of the agent's code; see wrangler.jsonc.
   AGENT_RUN_TIMEOUT_MS: string;
   AGENT_RUN_CPU_MS: string;

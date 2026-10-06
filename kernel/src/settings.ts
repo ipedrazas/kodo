@@ -435,14 +435,15 @@ async function showUsage() {
   $("usage-view").replaceChildren(
     el("p", { class: "muted hint" }, u.month + ", UTC"),
     el("div", { class: "stats" }, stat("Cells", number(t.cells)), stat("Active cells", number(t.activeCells)), stat("Chats", number(t.sessions)),
-      stat("Requests", number(t.requests)), stat("Model tokens", number(t.inference.total)), stat("Storage", bytes(t.storageBytes))),
+      stat("Requests", number(t.requests)), stat("Pushed", number(t.pushed)), stat("Model tokens", number(t.inference.total)), stat("Storage", bytes(t.storageBytes))),
     u.cells.length ? el("table", {},
-      el("thead", {}, el("tr", {}, el("th", {}, "Cell or chat"), el("th", {}, "Blueprint"), el("th", { class: "num" }, "Requests"), el("th", { class: "num" }, "Model calls"), el("th", { class: "num" }, "Tokens"), el("th", { class: "num" }, "Storage"))),
+      el("thead", {}, el("tr", {}, el("th", {}, "Cell or chat"), el("th", {}, "Blueprint"), el("th", { class: "num" }, "Requests"), el("th", { class: "num" }, "Pushed"), el("th", { class: "num" }, "Model calls"), el("th", { class: "num" }, "Tokens"), el("th", { class: "num" }, "Storage"))),
       el("tbody", {}, u.cells.map((r) => {
         const calls = Object.values(r.inference).reduce((a, m) => a + m.calls, 0);
         const tokens = Object.values(r.inference).reduce((a, m) => a + m.total, 0);
         return el("tr", {}, el("td", {}, r.kind === "session" ? "chat " + r.id : r.id, r.error ? el("div", { class: "bad hint" }, r.error) : null),
           el("td", {}, r.kind === "session" ? "agent" : r.blueprint + " " + r.version), el("td", { class: "num" }, number(r.requests)),
+          el("td", { class: "num" }, number(r.pushed)),
           el("td", { class: "num" }, number(calls)), el("td", { class: "num" }, number(tokens)), el("td", { class: "num" }, bytes(r.storageBytes)));
       }))) : el("p", { class: "muted" }, "Nothing yet this month."));
 }

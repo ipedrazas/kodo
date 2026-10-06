@@ -5,6 +5,7 @@ import {
   type ApprovalStatus,
   GADGET_RUNTIME,
   SETTLED,
+  type SocketInfo,
   type TokenUsage,
   cellProps,
   fromApprovals,
@@ -29,6 +30,8 @@ interface Gadget {
   __kodoApprovalSettled(status: ApprovalStatus): Promise<void>;
   // Defined by the gadget runtime: the size of the gadget's database.
   __kodoStorageBytes(): Promise<number>;
+  // Defined by the gadget runtime; calls the gadget's onOpen.
+  __kodoOpened(socket: string, caller: GadgetCaller): Promise<{ failed?: string }>;
 }
 
 // Tokens used through one granted model.
@@ -43,6 +46,9 @@ export interface ModelUsage {
 export interface MonthUsage {
   // HTTP requests and WebSocket messages that reached the gadget.
   requests: number;
+  // Frames sent on the gadget's sockets at its request, other than replies
+  // to a message. Missing in months before socket push.
+  pushed?: number;
   // When the last of them arrived, in epoch milliseconds.
   lastActive: number | null;
   // Model calls by the granted model's name, e.g. "fast" for
@@ -52,6 +58,7 @@ export interface MonthUsage {
 
 export interface CellUsage extends MonthUsage {
   month: string;
+  pushed: number;
   // The gadget's database when last measured, or null if it never was (a
   // gadget that does not extend Gadget cannot be measured).
   storageBytes: number | null;
@@ -171,10 +178,13 @@ interface GadgetCaller {
   role: Role;
 }
 
+// Kept with each socket, which is also tagged with its id. Sockets opened
+// before socket push have neither openedAt nor the tag.
 interface SocketAttachment {
   cell: string;
   socket: string;
   caller: GadgetCaller;
+  openedAt?: number;
 }
 
 const READ_METHODS = new Set(["GET", "HEAD"]);
@@ -222,6 +232,11 @@ const TIMED_OUT = Symbol("timed out");
 // would be the standard code, but celld 0.6.0 delivers it to the client as
 // 1006, so the kernel uses one from the application range.
 export const CLOSE_GADGET_FAILED = 4011;
+// Sockets a cell holds at once, unless GADGET_MAX_SOCKETS says otherwise.
+const DEFAULT_MAX_SOCKETS = 1000;
+// A keepalive the runtime answers for the cell.
+const PING = "ping";
+const PONG = "pong";
 
 // One cell per gadget instance. The cell serves only while its workspace has
 // bound it to a Blueprint version. It loads that version's bundle by digest
@@ -237,6 +252,17 @@ export class Cell extends DurableObject<Env> {
   // Usage not yet written, by month.
   private pending = new Map<string, MonthUsage>();
   private flushing: number | null = null;
+  // Sockets being closed, by id. celld lists a socket, as open, until its
+  // close handler has returned.
+  private closing = new Set<string>();
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    // A client keeps a quiet socket open through proxies' idle timeouts by
+    // sending "ping"; the runtime answers "pong" without waking the cell or
+    // the gadget.
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PING, PONG));
+  }
 
   // Called by the workspace to create the cell or move it to another version.
   async bind(binding: CellBinding): Promise<void> {
@@ -312,6 +338,7 @@ export class Cell extends DurableObject<Env> {
     return {
       month,
       requests: stored?.requests ?? 0,
+      pushed: stored?.pushed ?? 0,
       lastActive: stored?.lastActive ?? null,
       inference: stored?.inference ?? {},
       storageBytes: this.ctx.storage.kv.get<number>("storage-bytes") ?? null,
@@ -340,6 +367,62 @@ export class Cell extends DurableObject<Env> {
     await this.adoptAlarm();
     this.ctx.storage.kv.delete("gadget-alarm");
     await this.schedule();
+  }
+
+  // Called by the kernel's host binding: the sockets open on this cell. An
+  // ephemeral cell has none.
+  async gadgetSockets(): Promise<SocketInfo[]> {
+    if (this.binding()?.run) return [];
+    return this.openSockets().map(({ attachment: a }) => ({
+      socket: a.socket,
+      user: a.caller.user,
+      email: a.caller.email,
+      role: a.caller.role,
+      openedAt: a.openedAt ?? null,
+    }));
+  }
+
+  // Called by the kernel's host binding, which has checked the message and
+  // the lists, to send on some of this cell's sockets, or on all of them but
+  // `except` when `targets` is null. Answers how many it was sent on; ids
+  // that are not open sockets of this cell are skipped.
+  async pushToSockets(targets: string[] | null, message: string | ArrayBuffer, except: string[]): Promise<number> {
+    if (this.binding()?.run) return 0;
+    const skip = new Set(except);
+    const sockets =
+      targets === null
+        ? this.openSockets().filter(({ attachment }) => !skip.has(attachment.socket))
+        : [...new Set(targets)].filter((id) => !skip.has(id)).flatMap((id) => this.openSockets(id));
+    let sent = 0;
+    for (const { ws } of sockets) {
+      try {
+        ws.send(message);
+        sent++;
+      } catch {
+        // Closed since it was listed.
+      }
+    }
+    if (sent) {
+      const usage = this.counting();
+      usage.pushed = (usage.pushed ?? 0) + sent;
+    }
+    return sent;
+  }
+
+  // Called by the kernel's host binding to close one of this cell's
+  // sockets. Answers whether it was open.
+  async closeGadgetSocket(socket: string, code: number, reason: string): Promise<boolean> {
+    if (this.binding()?.run) return false;
+    const [found] = this.openSockets(socket);
+    if (!found) return false;
+    try {
+      found.ws.close(code, reason);
+    } catch {
+      return false;
+    }
+    // Until the client answers and webSocketClose runs.
+    this.closing.add(socket);
+    return true;
   }
 
   // Called by the kernel's host binding when one of this cell's calls is
@@ -489,6 +572,8 @@ export class Cell extends DurableObject<Env> {
     this.counting().requests++;
     try {
       if (upgrade) {
+        const max = Number(this.env.GADGET_MAX_SOCKETS) || DEFAULT_MAX_SOCKETS;
+        if (this.ctx.getWebSockets().length >= max) return text(503, `cell ${cell} has its ${max} sockets open`);
         await this.load(cell);
         return this.acceptSocket(cell, caller);
       }
@@ -520,15 +605,19 @@ export class Cell extends DurableObject<Env> {
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     const { cell, socket } = ws.deserializeAttachment() as SocketAttachment;
-    try {
-      await this.call(cell, (gadget) => gadget.onClose(socket, code, reason));
-    } catch {
-      // A gadget without onClose, or one that fails in it, changes nothing.
-    }
+    // The gadget's onClose no longer finds it in sockets().
+    this.closing.add(socket);
     try {
       ws.close(code, reason);
     } catch {
       // Already closed.
+    }
+    try {
+      await this.call(cell, (gadget) => gadget.onClose(socket, code, reason));
+    } catch {
+      // A gadget without onClose, or one that fails in it, changes nothing.
+    } finally {
+      this.closing.delete(socket);
     }
   }
 
@@ -625,7 +714,7 @@ export class Cell extends DurableObject<Env> {
     const now = Date.now();
     const month = new Date(now).toISOString().slice(0, 7);
     let usage = this.pending.get(month);
-    if (!usage) this.pending.set(month, (usage = { requests: 0, lastActive: null, inference: {} }));
+    if (!usage) this.pending.set(month, (usage = { requests: 0, pushed: 0, lastActive: null, inference: {} }));
     usage.lastActive = now;
     this.flushing ??= setTimeout(() => {
       this.flushing = null;
@@ -642,6 +731,7 @@ export class Cell extends DurableObject<Env> {
       const key = `usage:${month}`;
       const stored = kv.get<MonthUsage>(key) ?? { requests: 0, lastActive: null, inference: {} };
       stored.requests += add.requests;
+      if (add.pushed) stored.pushed = (stored.pushed ?? 0) + add.pushed;
       stored.lastActive = Math.max(stored.lastActive ?? 0, add.lastActive ?? 0) || null;
       for (const [model, u] of Object.entries(add.inference)) {
         const m = (stored.inference[model] ??= { calls: 0, input: 0, output: 0, total: 0 });
@@ -670,11 +760,43 @@ export class Cell extends DurableObject<Env> {
     }
   }
 
+  // Accepts a socket, tagged with its id, and tells the gadget once the
+  // upgrade has been answered.
   private acceptSocket(cell: string, caller: GadgetCaller): Response {
     const [server, client] = Object.values(new WebSocketPair());
-    this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ cell, socket: crypto.randomUUID(), caller } satisfies SocketAttachment);
+    const socket = crypto.randomUUID();
+    this.ctx.acceptWebSocket(server, [socket]);
+    server.serializeAttachment({ cell, socket, caller, openedAt: Date.now() } satisfies SocketAttachment);
+    this.ctx.waitUntil(this.opened(server, cell, socket, caller));
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  // Calls the gadget's onOpen. One that throws or does not answer in time
+  // closes the socket, as onMessage does; a gadget that does not extend
+  // Gadget has no __kodoOpened, and its call fails without closing it.
+  private async opened(ws: WebSocket, cell: string, socket: string, caller: GadgetCaller): Promise<void> {
+    let failed: string | undefined;
+    try {
+      failed = (await this.call(cell, (gadget) => gadget.__kodoOpened(socket, caller)))?.failed;
+      if (failed !== undefined) failed = `gadget failed: ${failed}`;
+    } catch (err) {
+      if (err instanceof GadgetError && err.status === 504) failed = err.message;
+    }
+    if (failed === undefined) return;
+    try {
+      ws.close(CLOSE_GADGET_FAILED, failed.slice(0, 120));
+    } catch {
+      // Already closed.
+    }
+  }
+
+  // The cell's open sockets, or the one with this id.
+  private openSockets(id?: string): { ws: WebSocket; attachment: SocketAttachment }[] {
+    return this.ctx
+      .getWebSockets(id)
+      .filter((ws) => ws.readyState === WebSocket.OPEN)
+      .map((ws) => ({ ws, attachment: ws.deserializeAttachment() as SocketAttachment }))
+      .filter(({ attachment }) => !this.closing.has(attachment.socket));
   }
 
   private binding(): CellBinding | undefined {

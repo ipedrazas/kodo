@@ -380,6 +380,11 @@ tasks:
     cmds:
       - test/e2e/examples.sh
 
+  k3s:chat-test:
+    desc: Chat as alice and bob through the hiddenfield.dev gateway; lines arrive within a second and a quiet socket stays open (QUIET_S, default 600)
+    cmds:
+      - test/e2e/chat.sh
+
   k3s:admin-test:
     desc: Check administration end to end on hiddenfield.dev as carol, the platform admin (switches the agent to the simulator for one turn)
     cmds:
