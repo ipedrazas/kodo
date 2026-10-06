@@ -1,6 +1,7 @@
 // Gadgets that send on their cell's sockets unprompted: from any handler,
 // to one socket, a list or all of them, within limits, and only their own.
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { after, before, describe, test } from "node:test";
 import { startKernel } from "./dev.mjs";
@@ -255,10 +256,12 @@ describe("limits", () => {
     // (on main too; see plans/socket-push.md).
     const logged = kernel.logs().length;
     try {
-      for (let i = 0; i < 1000; i += 5) sockets.push(...(await Promise.all(Array.from({ length: 5 }, () => open(cell)))));
+      const timely = (p) => Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error("no answer in 10 s")), 10_000))]);
+      for (let i = 0; i < 1000; i += 5) sockets.push(...(await Promise.all(Array.from({ length: 5 }, () => timely(open(cell))))));
     } catch (err) {
-      const warnings = kernel.logs().slice(logged).split("\n").filter((l) => /WARN|ERROR/.test(l) && !/allocator/.test(l));
-      throw new Error(`after ${sockets.length} sockets: ${err.message}\n${warnings.slice(-20).join("\n")}`);
+      const lines = kernel.logs().slice(logged).split("\n").filter((l) => l && !/allocator/.test(l));
+      const limit = execSync("ulimit -n", { shell: "/bin/sh" }).toString().trim();
+      throw new Error(`after ${sockets.length} sockets (ulimit -n ${limit}): ${err.message}\n${lines.slice(-30).join("\n")}`);
     }
     const started = Date.now();
     assert.deepEqual(await call(cell, "/broadcast", { body: "to all" }), { sent: 1000 });
