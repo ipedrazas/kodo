@@ -1,0 +1,14 @@
+# Blueprint chat 1.0.0. It needs no capabilities: the lines live in the
+# cell's own database, the cell's shares say who is in the room, and the
+# cell holds the sockets the gadget sends on.
+apiVersion: kodo.dev/v1alpha1
+kind: Blueprint
+metadata:
+  name: chat-1.0.0
+spec:
+  fleet: kodo
+  blueprint: chat
+  version: 1.0.0
+  source:
+    name: chat
+    key: gadget.js

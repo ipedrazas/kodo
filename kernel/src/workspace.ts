@@ -63,6 +63,8 @@ export interface UsageTotals {
   activeCells: number;
   sessions: number;
   requests: number;
+  // Frames gadgets sent on their sockets other than replies.
+  pushed: number;
   // The gadgets' databases as last measured; unmeasured cells add nothing.
   storageBytes: number;
   inference: ModelUsage;
@@ -487,7 +489,7 @@ export class Workspace extends DurableObject<Env> {
           // One cell that cannot answer, e.g. still running an older kernel
           // just after a deploy, does not fail the report.
           const error = err instanceof Error ? err.message : String(err);
-          rows[i] = { month, requests: 0, lastActive: null, inference: {}, storageBytes: null, ...row, error };
+          rows[i] = { month, requests: 0, pushed: 0, lastActive: null, inference: {}, storageBytes: null, ...row, error };
         }
       }
     };
@@ -525,6 +527,7 @@ function emptyTotals(): UsageTotals {
     activeCells: 0,
     sessions: 0,
     requests: 0,
+    pushed: 0,
     storageBytes: 0,
     inference: { calls: 0, input: 0, output: 0, total: 0 },
   };
@@ -538,6 +541,7 @@ function addUsage(t: UsageTotals, row: CellUsageRow): void {
     if (row.requests > 0) t.activeCells++;
   }
   t.requests += row.requests;
+  t.pushed += row.pushed;
   t.storageBytes += row.storageBytes ?? 0;
   for (const m of Object.values(row.inference)) {
     t.inference.calls += m.calls;

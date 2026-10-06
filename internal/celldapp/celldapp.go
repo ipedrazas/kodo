@@ -210,7 +210,7 @@ func check(bundle []byte, metafile string) []string {
 		problems = append(problems, "uses storage alarms; a gadget asks its cell with this.setAlarm() from the kodo Gadget class")
 	}
 	if websocketUse.Match(bundle) {
-		problems = append(problems, "accepts WebSockets; a gadget gets socket messages in onMessage() from the kodo Gadget class")
+		problems = append(problems, "accepts WebSockets; with the kodo Gadget class the cell holds the sockets, and a gadget gets onOpen() and onMessage() and sends with this.send() and this.broadcast()")
 	}
 	return problems
 }

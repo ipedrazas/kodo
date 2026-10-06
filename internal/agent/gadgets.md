@@ -71,7 +71,13 @@ Inside the page string, a browser-side template literal needs its backticks and 
 - `this.ctx.storage.sql.exec(query, ...params)`: the cell's SQLite database; `.toArray()` and `.one()` on the result. `this.ctx.storage.kv.get(key)` and `.put(key, value)` for simple values. Create tables in the constructor with `IF NOT EXISTS`. Data survives restarts and new versions, so a new version must read what the old one wrote.
 - `this.grants[capability].fetch(path, {method, headers, body})`: a call through a capability the owner granted, returning a `Response`. A capability not granted has no entry: check for it and say on the page that the owner must grant it.
 - `this.setAlarm(dateOrMs)` and `onAlarm()`: one scheduled wake-up.
-- WebSockets: the browser opens `new WebSocket("wss://" + location.host + "/")`; the gadget's `onMessage(socket, message, caller)` receives each message and may return a string to send back on the same socket. It cannot push unprompted.
+- WebSockets, for anything live (a chat, a page that updates itself): the browser opens `new WebSocket("wss://" + location.host + "/")`, sends `"ping"` every 30 s (the kernel answers `"pong"`; ignore it), and reconnects when it closes. The cell holds the sockets; each has an opaque id.
+  - `onOpen(socket, caller)`: a socket opened; `caller` is `{user, email, role}`. Send it what it needs to start, e.g. `await this.send(socket, JSON.stringify({history}))`.
+  - `onMessage(socket, message, caller)`: a message arrived. It may return a string to send back on the same socket.
+  - `onClose(socket, code, reason)`: a socket closed.
+  - `await this.send(socketOrList, message)` sends on one socket or a list, `await this.broadcast(message, {except: socket})` on every socket but `except`, from any handler, including `fetch` and `onAlarm`. Both resolve to how many sockets got it; closed ones are skipped.
+  - `await this.sockets()` lists `[{socket, user, email, role, openedAt}]`, for who is online. `await this.closeSocket(socket)` closes one.
+  - A message is at most 1 MiB. Viewers cannot open a socket.
 
 ## What it cannot do
 

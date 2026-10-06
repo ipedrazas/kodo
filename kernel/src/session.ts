@@ -393,11 +393,12 @@ export class Session extends DurableObject<Env> {
 
   // What the session did in a month: turns and runs as requests, the
   // tokens of its model calls and its runs', and its transcript's size.
-  async usage(month: string): Promise<MonthUsage & { month: string; storageBytes: number }> {
+  async usage(month: string): Promise<MonthUsage & { month: string; pushed: number; storageBytes: number }> {
     const stored = this.ctx.storage.kv.get<MonthUsage>(`usage:${month}`);
     return {
       month,
       requests: stored?.requests ?? 0,
+      pushed: 0,
       lastActive: stored?.lastActive ?? null,
       inference: stored?.inference ?? {},
       storageBytes: this.ctx.storage.sql.databaseSize,
