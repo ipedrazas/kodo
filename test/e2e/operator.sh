@@ -23,7 +23,7 @@
 set -euo pipefail
 : "${CONTEXT:?}" "${KERNEL_IMAGE:?}" "${KERNEL_IMAGE_2:?}" "${BUCKET:?}"
 NS=${NS:-kodo-e2e}
-CELLD_IMAGE=${CELLD_IMAGE:-ghcr.io/denoland/celld:0.6.0}
+CELLD_IMAGE=${CELLD_IMAGE:-ghcr.io/denoland/celld:0.6.1}
 CELLD_IMAGE_2=${CELLD_IMAGE_2:-ghcr.io/denoland/celld@sha256:e188a7f2bb0b8cec9fb04ee4c3d1ed7cca0ea0419519ae2a9ba36e5b6fe5161b}
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)

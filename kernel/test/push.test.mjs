@@ -9,7 +9,7 @@ import { startKernel } from "./dev.mjs";
 const IDLE_EVICT_S = 2;
 // The sockets one cell may hold. GADGET_MAX_SOCKETS is 1000 in production;
 // the tests use 100 unless PUSH_SOCKETS=1000, because after some thousand
-// sockets on a node celld 0.6.0 loses the answer to some upgrades, sooner
+// sockets on a node celld 0.6.0 and 0.6.1 lose the answer to some upgrades, sooner
 // on a slow machine (see plans/socket-push.md).
 const MAX_SOCKETS = Number(process.env.PUSH_SOCKETS ?? 100);
 const CAPABILITY = "web:example.com:read";

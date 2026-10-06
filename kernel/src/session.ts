@@ -107,8 +107,8 @@ const APPROVAL_POLL_FIRST_MS = 2_000;
 const APPROVAL_POLL_MAX_MS = 60_000;
 const MAX_WATCHED_APPROVALS = 100;
 const APPROVAL_BODY_BYTES = 2048;
-// Gadgets the agent writes. Each draft is a new bundle, and celld 0.6.0
-// keeps every bundle it loads in memory, so a session may write only so
+// Gadgets the agent writes. Each draft is a new bundle, which celld before
+// 0.6.1 kept in memory for good once loaded, so a session may write only so
 // many.
 const MAX_DRAFTS = 20;
 const MAX_GADGET_BYTES = 96 * 1024;

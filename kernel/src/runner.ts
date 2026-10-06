@@ -1,10 +1,11 @@
 import { sha256Hex } from "./http";
 import { SES_SOURCE } from "./vendor/ses";
 
-// The gadget that runs the agent's code: one bundle for every run, so the
-// fleet loads it once per node however many runs there are (celld 0.6.0
-// never releases a loaded bundle's memory). Every cell running it on a node
-// shares one isolate, so the runner locks the isolate down with SES before
+// The gadget that runs the agent's code: one bundle for every run, so a
+// node loads it once for all the runs it holds at a time, rather than once
+// per run (celld releases a loaded bundle only when nothing on the node
+// uses it, and before 0.6.1 never did). Every cell running it on a node
+// shares that isolate, so the runner locks the isolate down with SES before
 // any run: the shared built-ins are frozen, and each run evaluates in a
 // Compartment of its own with a fresh global object. One run cannot change
 // what another sees, and the code cannot reach the runner, the kernel's

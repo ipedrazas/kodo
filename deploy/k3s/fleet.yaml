@@ -9,7 +9,7 @@ metadata:
   name: kodo
   namespace: kodo
 spec:
-  celld: ghcr.io/denoland/celld:0.6.0
+  celld: ghcr.io/denoland/celld:0.6.1
   kernel: KERNEL_IMAGE
   replicas: 3
   runtimeClassName: gvisor

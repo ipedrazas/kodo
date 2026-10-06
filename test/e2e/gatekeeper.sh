@@ -202,11 +202,11 @@ def find(**want):
     return [r for r in records if all(r.get(k) == v for k, v in want.items())]
 allowed = find(cell=viewer, grant=grant, decision="allowed", blueprint="repo-viewer", workspace="team")
 denied = find(cell=caps, decision="denied")
-rejected = find(decision="rejected")
+untrusted = find(decision="untrusted")
 for r in allowed + denied:
     assert r["user"] and r["email"].startswith("alice@") and r["fleet"] == "kodo/kodo", r
-assert allowed and denied and rejected, (len(allowed), len(denied), len(rejected))
-print(f"{len(records)} records: {len(allowed)} allowed for the viewer, {len(denied)} denied for the fixture, {len(rejected)} rejected impostors")
+assert allowed and denied and untrusted, (len(allowed), len(denied), len(untrusted))
+print(f"{len(records)} records: {len(allowed)} allowed for the viewer, {len(denied)} denied for the fixture, {len(untrusted)} untrusted (bad signature or unknown fleet)")
 print("e.g.", json.dumps(allowed[0]))
 PY
 
