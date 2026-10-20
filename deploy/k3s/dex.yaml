@@ -31,6 +31,11 @@ data:
         secretEnv: DEX_CLIENT_SECRET
         redirectURIs:
           - https://app.hiddenfield.dev/oauth2/callback
+      - id: tap
+        name: tap
+        secretEnv: TAP_CLIENT_SECRET
+        redirectURIs:
+          - https://tap.hiddenfield.dev/oauth2/callback
     staticPasswords:
       - email: alice@hiddenfield.dev
         username: alice
