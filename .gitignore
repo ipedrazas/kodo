@@ -48,3 +48,5 @@ test/e2e/results/
 # Scoped bucket keys (deploy/k3s/bucket-keys.sh)
 .buckets.env
 .buckets.env.tmp
+applet-one
+celld-examples
