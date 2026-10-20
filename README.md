@@ -6,7 +6,7 @@ Calls that change something outside (sending an email, writing, deleting) wait u
 
 kodo runs on [celld](https://github.com/denoland/celld), a self-hosted runtime for Workers and Durable Objects. celld provides cell ownership, placement, hibernation and failover across a fleet of nodes that share a bucket; kodo adds the kernel, the operator and the Gatekeeper.
 
-The design is in [plans/](plans/): the [technical solution draft](plans/Gadgets%20on%20Kubernetes%20-%20Technical%20Solution%20Draft.md) and the [phased plan](plans/gadgets-on-kubernetes.md), with what each phase built and measured.
+The design is in [plans/](plans/): the [technical solution draft](plans/Gadgets%20on%20Kubernetes%20-%20Technical%20Solution%20Draft.md).
 
 ## How it fits together
 
@@ -127,9 +127,6 @@ Images are built by CI for amd64 and arm64: `ghcr.io/ipedrazas/kodo-{kernel,oper
 | `spike/celld` | The Phase 0 and 1 celld spike and its results |
 | `plans/` | The solution draft and the phased plan |
 
-## Status
-
-Phases 0 to 5 and 7 to 9 are done: celld spike, kernel, Blueprints and workspaces, operator, identity and sharing, the Gatekeeper read path, the approval queue, and the inference gateway. Phase 6 (autoscaling and observability) waits on upstream celld fixes. The [plan](plans/gadgets-on-kubernetes.md) has the details and what comes next: the agent.
 
 ## License
 
