@@ -12,7 +12,7 @@ For each one, this page says what kodo needs from it (the contract), what the re
 | [NetworkPolicy enforcement](#kubernetes-and-network-policy) | Yes | k3s's built-in policy controller | kindnet | Calico, Cilium, any enforcing CNI |
 | [Sandboxed runtime](#sandboxed-container-runtime) | Strongly recommended | gVisor, `RuntimeClass gvisor` | None (runc) | Kata Containers, GKE Sandbox |
 | [Node volumes](#node-volumes) | Yes | `local-path` | kind default | Any StorageClass with low fsync latency |
-| [Runtime](#runtime-celld) | Yes, not replaceable | celld 0.6.1 | celld 0.6.1 | None |
+| [Runtime](#runtime-celld) | Yes, not replaceable | celld 0.6.2 | celld 0.6.2 | None |
 | [Object storage](#object-storage) | Yes | Tigris, two buckets | SeaweedFS 3.97 in the cluster | Any S3 API that passes `celld diagnose` (RustFS passed; AWS S3, MinIO, Ceph RGW untested) |
 | [Gateway with OIDC](#gateway-and-login) | Yes | Envoy Gateway v1.9.2 | None (admin token only) | Any gateway that logs users in and forwards the ID token |
 | [Load balancer](#load-balancer-dns-and-tls) | For external access | MetalLB | Port-forward | Cloud load balancer |
@@ -59,7 +59,7 @@ kodo creates the policies; it cannot tell whether they are enforced. Check befor
 
 **Contract.** [celld](https://github.com/denoland/celld), Deno's self-hosted runtime for Workers and Durable Objects. kodo relies on it for cell ownership, placement, hibernation, failover, eviction and code loading, and on its Worker Loader and facets to run gadgets. This is the one dependency with no alternative: the kernel is a celld application.
 
-**Reference.** `ghcr.io/denoland/celld:0.6.1`, set in `Fleet.spec.celld`. The kernel image bundles celld to deploy the kernel, and the kernel tests run under `celld dev`, so the celld CLI is also a build dependency.
+**Reference.** `ghcr.io/denoland/celld:0.6.2`, set in `Fleet.spec.celld`. The kernel image bundles celld to deploy the kernel, and the kernel tests run under `celld dev`, so the celld CLI is also a build dependency.
 
 **Constraints.** Mixed celld versions cannot share a fleet, so upgrades stop the fleet ([runbook](runbook.md#celld)). Known 0.6.x problems (bundle memory never released, ArrayBuffers outside the heap limit, a WebSocket upgrade hang, a stuck restore after peers self-fence) are in [architecture.md](architecture.md#known-limits) and the [upstream report](../spike/celld/upstream/celld-0.6.0-report.md).
 
@@ -169,7 +169,7 @@ Images are published to GHCR by CI: `ghcr.io/ipedrazas/kodo-{kernel,operator,gat
 | --- | --- | --- |
 | Go | Operator, Gatekeeper, agent, `kodo` CLI | 1.27 (`go.mod`) |
 | Node.js | Kernel typecheck and tests | 24 |
-| celld CLI | `celld dev` for kernel tests; kernel deploys | 0.6.1 |
+| celld CLI | `celld dev` for kernel tests; kernel deploys | 0.6.2 |
 | esbuild | Bundling the kernel and gadgets | On `PATH` |
 | [Task](https://taskfile.dev) | Every workflow in [`Taskfile.yml`](../Taskfile.yml) | 3 |
 | kubectl | Everything | Matching the cluster |

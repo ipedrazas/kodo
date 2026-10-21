@@ -1,0 +1,11 @@
+// A plain celld project: a Worker that routes /lists/<name>/ to one Todos
+// object per name. Nothing in it knows about kodo.
+{
+  "name": "todos",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-10",
+  "durable_objects": {
+    "bindings": [{ "name": "LISTS", "class_name": "Todos" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Todos"] }],
+}

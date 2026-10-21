@@ -6,7 +6,7 @@ Calls that change something outside (sending an email, writing, deleting) wait u
 
 kodo runs on [celld](https://github.com/denoland/celld), a self-hosted runtime for Workers and Durable Objects. celld provides cell ownership, placement, hibernation and failover across a fleet of nodes that share a bucket; kodo adds the kernel, the operator and the Gatekeeper.
 
-How the pieces fit, where state lives and the trust boundaries are in [docs/architecture.md](docs/architecture.md); what it needs around it (Kubernetes with NetworkPolicy, gVisor, object storage, an OIDC provider, a gateway, OpenBao, an inference gateway) and the alternatives are in [docs/dependencies.md](docs/dependencies.md); how to deploy, check and repair a running platform is in [docs/runbook.md](docs/runbook.md). The design is in [plans/](plans/): the [technical solution draft](plans/Gadgets%20on%20Kubernetes%20-%20Technical%20Solution%20Draft.md) and the [phased plan](plans/gadgets-on-kubernetes.md), with what each phase built and measured.
+How the pieces fit, where state lives and the trust boundaries are in [docs/architecture.md](docs/architecture.md); what it needs around it (Kubernetes with NetworkPolicy, gVisor, object storage, an OIDC provider, a gateway, OpenBao, an inference gateway) and the alternatives are in [docs/dependencies.md](docs/dependencies.md); how to deploy, check and repair a running platform is in [docs/runbook.md](docs/runbook.md); how a celld app runs on kodo, and what kodo does for it that plain Kubernetes leaves to you, is in [docs/celld-apps.md](docs/celld-apps.md). The design is in [plans/](plans/): the [technical solution draft](plans/Gadgets%20on%20Kubernetes%20-%20Technical%20Solution%20Draft.md) and the [phased plan](plans/gadgets-on-kubernetes.md), with what each phase built and measured.
 
 ## How it fits together
 
@@ -81,7 +81,7 @@ const res = await this.grants["inference:model/default:invoke"].fetch("/chat/com
 });
 ```
 
-The contract is [kernel/GADGETS.md](kernel/GADGETS.md). Seven examples: [kernel/examples/notes.js](kernel/examples/notes.js) uses storage, WebSockets and alarms; [examples/repo-viewer](examples/repo-viewer/README.md) reads GitHub through a grant, with a step-by-step deploy guide; [examples/mailer](examples/mailer/README.md) drafts emails that are sent once their owner approves them; [examples/ask](examples/ask/README.md) asks a model and keeps the conversation; [examples/daybreak](examples/daybreak/README.md) finds time with friends, a circle per cell whose members are the people it is shared with; [examples/hn-reader](examples/hn-reader/README.md) reads Hacker News through a public API grant and summarises threads with a model; [examples/chat](examples/chat/README.md) is a chat room whose lines the gadget sends to everyone's socket as they are said.
+The contract is [kernel/GADGETS.md](kernel/GADGETS.md). Eight examples: [kernel/examples/notes.js](kernel/examples/notes.js) uses storage, WebSockets and alarms; [examples/repo-viewer](examples/repo-viewer/README.md) reads GitHub through a grant, with a step-by-step deploy guide; [examples/mailer](examples/mailer/README.md) drafts emails that are sent once their owner approves them; [examples/ask](examples/ask/README.md) asks a model and keeps the conversation; [examples/daybreak](examples/daybreak/README.md) finds time with friends, a circle per cell whose members are the people it is shared with; [examples/hn-reader](examples/hn-reader/README.md) reads Hacker News through a public API grant and summarises threads with a model; [examples/chat](examples/chat/README.md) is a chat room whose lines the gadget sends to everyone's socket as they are said. [examples/celld-todos](examples/celld-todos/README.md) is a plain celld app, published unchanged with `kodo publish`.
 
 A Durable Object class from a celld project can run as a gadget unchanged: `kodo publish` bundles, checks and publishes it; see [From a celld project](kernel/GADGETS.md#from-a-celld-project).
 
@@ -133,7 +133,7 @@ Images are built by CI for amd64 and arm64: `ghcr.io/ipedrazas/kodo-{kernel,oper
 | `test/e2e` | End-to-end tests on kind and k3s |
 | `spike/celld` | The Phase 0 and 1 celld spike and its results |
 | `plans/` | The solution draft and the phased plan |
-| `docs/` | [Architecture](docs/architecture.md), [dependencies](docs/dependencies.md) and the [runbook](docs/runbook.md) |
+| `docs/` | [Architecture](docs/architecture.md), [dependencies](docs/dependencies.md), the [runbook](docs/runbook.md) and [celld apps on kodo](docs/celld-apps.md) |
 
 ## Status
 
