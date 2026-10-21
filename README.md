@@ -2,11 +2,11 @@
 
 Gadgets on Kubernetes: small, per-user apps ("gadgets") that run as isolated instances in a shared runtime, on your own cluster. Every user or document gets its own instance, a **cell**, with its own SQLite database; cells hibernate to an S3 bucket when idle and wake on the next request. Gadgets have no network: they reach external services only through capabilities their owner grants, and a separate Gatekeeper makes those calls with tokens the gadget never sees.
 
-Calls that change something outside (sending an email, writing, deleting) wait until the cell's owner approves them. Models are a capability too: the platform's inference gateway picks the backend, holds its keys, and keeps token budgets per user and per workspace.
+Calls that change something outside (sending an email, writing, deleting) wait until the cell's owner approves them. Models are a capability too: the platform's inference gateway picks the backend and holds its keys, and the kernel keeps monthly token budgets per user and per workspace. An agent at `app.<domain>/chat/` answers by running code in throwaway cells and can write new gadgets for you to publish.
 
 kodo runs on [celld](https://github.com/denoland/celld), a self-hosted runtime for Workers and Durable Objects. celld provides cell ownership, placement, hibernation and failover across a fleet of nodes that share a bucket; kodo adds the kernel, the operator and the Gatekeeper.
 
-The design is in [plans/](plans/): the [technical solution draft](plans/Gadgets%20on%20Kubernetes%20-%20Technical%20Solution%20Draft.md) and the [phased plan](plans/gadgets-on-kubernetes.md), with what each phase built and measured.
+How the pieces fit, where state lives and the trust boundaries are in [docs/architecture.md](docs/architecture.md); what it needs around it (Kubernetes with NetworkPolicy, gVisor, object storage, an OIDC provider, a gateway, OpenBao, an inference gateway) and the alternatives are in [docs/dependencies.md](docs/dependencies.md); how to deploy, check and repair a running platform is in [docs/runbook.md](docs/runbook.md). The design is in [plans/](plans/): the [technical solution draft](plans/Gadgets%20on%20Kubernetes%20-%20Technical%20Solution%20Draft.md) and the [phased plan](plans/gadgets-on-kubernetes.md), with what each phase built and measured.
 
 ## How it fits together
 
@@ -35,7 +35,8 @@ browser ──► gateway (OIDC login, TLS) ────────────
 | **Gadget** | A JavaScript module exporting `App`. Gets HTTP requests, its own database, alarms, WebSockets it can send on unprompted, one binding per granted capability, and the outcome of calls that waited for approval. | [kernel/GADGETS.md](kernel/GADGETS.md) |
 | **Operator** | Reconciles `Fleet`, `Blueprint` and `Workspace` resources: nodes, Services, NetworkPolicies, kernel deploys, the catalog and workspaces. | [config/](config/README.md) |
 | **Gatekeeper** | Stateless service outside every fleet. Holds users' tokens as OpenBao transit ciphertext, makes the reads grants allow, queues sends, writes and deletes for the owner's approval and runs each approved one at most once, sends model calls to the inference gateway, records every decision in `audit/`, and is the fleets' egress proxy. | [cmd/gatekeeper](cmd/gatekeeper/main.go), [config/README.md](config/README.md#gatekeeper) |
-| **Inference gateway** | Envoy AI Gateway, reached only by the Gatekeeper. Maps model names to backends (OpenRouter, an in-cluster simulator), holds their keys, and enforces token budgets per user and workspace. | [deploy/inference](deploy/inference/README.md) |
+| **Inference gateway** | Envoy AI Gateway, reached only by the Gatekeeper. Maps model names to backends (OpenRouter, an in-cluster simulator), holds their keys, and limits each user's call rate. Monthly token budgets per user and workspace are the kernel's. | [deploy/inference](deploy/inference/README.md) |
+| **Agent** | A stateless service serving the chat at `app.<domain>/chat/`. It answers by running JavaScript in ephemeral cells with the chat's grants, and writes gadgets as draft Blueprints their author publishes. It acts with a per-turn token, never the user's login. | [kernel/AGENT.md](kernel/AGENT.md), [cmd/agent](cmd/agent/main.go) |
 
 The words: a **Blueprint** is a versioned gadget (a bundle plus the capabilities it may ask for); a **Workspace** holds cells under a quota; a **cell** is one instance of a Blueprint version, owned by a user and optionally shared as viewer or editor; a **capability** is `<provider>:<resource>:<verb>`, e.g. `github:repo/acme/api:read`, declared by a Blueprint and granted per cell by its owner.
 
@@ -86,7 +87,7 @@ A Durable Object class from a celld project can run as a gadget unchanged: `kodo
 
 ## Run it
 
-You need [Task](https://taskfile.dev), Go, Node 24, [celld](https://github.com/denoland/celld) and esbuild on `PATH`, and kubectl. Kubernetes clusters need a network plugin that enforces NetworkPolicy.
+You need [Task](https://taskfile.dev), Go, Node 24, [celld](https://github.com/denoland/celld) and esbuild on `PATH`, and kubectl. Kubernetes clusters need a network plugin that enforces NetworkPolicy; everything else a cluster needs is in [docs/dependencies.md](docs/dependencies.md).
 
 ```sh
 task kernel:check                 # kernel typecheck and tests under celld dev
@@ -99,15 +100,19 @@ The integration environment is hiddenfield.dev on a k3s cluster with gVisor, Tig
 
 ```sh
 task openbao:setup                # once, as an OpenBao admin: deploy/openbao/README.md
-task k3s:up KERNEL_IMAGE=... OPERATOR_IMAGE=... GATEKEEPER_IMAGE=...
+task k3s:up KERNEL_IMAGE=... OPERATOR_IMAGE=... GATEKEEPER_IMAGE=... AGENT_IMAGE=...
 task k3s:identity-test            # identity, TLS and sharing
 task k3s:gatekeeper-test          # grants, the Gatekeeper, egress, vault and audit
 task k3s:approvals-test           # the approval queue, with Resend (RESEND_API_KEY, RESEND_FROM)
 task k3s:inference-test           # models through grants, routing, budgets and usage (OPENROUTER_API_KEY)
 task k3s:examples-test            # daybreak and hn-reader through the gateway
+task k3s:chat-test                # sockets: the chat example as alice and bob
+task k3s:agent-test               # the agent's code in ephemeral cells (OPENROUTER_API_KEY)
+task k3s:authoring-test           # the agent writes gadgets, the author publishes them
+task k3s:admin-test               # platform and workspace admins, settings, suspension, audit
 ```
 
-Images are built by CI for amd64 and arm64: `ghcr.io/ipedrazas/kodo-{kernel,operator,gatekeeper}`, tagged `main` and `sha-<commit>` from main and `pr-<number>` from pull requests.
+Images are built by CI for amd64 and arm64: `ghcr.io/ipedrazas/kodo-{kernel,operator,gatekeeper,agent}`, tagged `main` and `sha-<commit>` from main and `pr-<number>` from pull requests. Deploy by `sha-` tag; the [runbook](docs/runbook.md#deploy) has the steps.
 
 ## Repository
 
@@ -116,20 +121,23 @@ Images are built by CI for amd64 and arm64: `ghcr.io/ipedrazas/kodo-{kernel,oper
 | `api/v1alpha1` | The `kodo.dev/v1alpha1` CRD types |
 | `cmd/operator`, `internal/controller` | The operator |
 | `cmd/gatekeeper`, `internal/gatekeeper` | The Gatekeeper: calls, approvals, the GitHub, email, web and inference providers, token vault, audit, egress proxy |
+| `cmd/agent`, `internal/agent` | The agent: the chat, its prompt and loop, and its kernel client |
+| `internal/kernelapi` | The operator's client for the kernel API |
 | `cmd/kodo`, `internal/celldapp` | The `kodo` CLI: `kodo publish` runs a celld Durable Object class as a gadget |
 | `internal/vault` | The vault interface and its OpenBao transit implementation |
 | `kernel/` | The kernel Worker, its tests and the gadget contract |
 | `examples/` | Example gadgets with their Blueprints |
 | `config/` | CRDs, RBAC, the operator and the Gatekeeper base manifests |
 | `deploy/` | Environments: kind and k3s fleets, hiddenfield.dev, the inference gateway, OpenBao setup |
-| `images/` | Dockerfiles for the kernel, operator and Gatekeeper images |
+| `images/` | Dockerfiles for the kernel, operator, Gatekeeper and agent images |
 | `test/e2e` | End-to-end tests on kind and k3s |
 | `spike/celld` | The Phase 0 and 1 celld spike and its results |
 | `plans/` | The solution draft and the phased plan |
+| `docs/` | [Architecture](docs/architecture.md), [dependencies](docs/dependencies.md) and the [runbook](docs/runbook.md) |
 
 ## Status
 
-Phases 0 to 5 and 7 to 9 are done: celld spike, kernel, Blueprints and workspaces, operator, identity and sharing, the Gatekeeper read path, the approval queue, and the inference gateway. Phase 6 (autoscaling and observability) waits on upstream celld fixes. The [plan](plans/gadgets-on-kubernetes.md) has the details and what comes next: the agent.
+Phases 0 to 5 and 7 to 12 are done: celld spike, kernel, Blueprints and workspaces, operator, identity and sharing, the Gatekeeper read path, the approval queue, the inference gateway, the agent's code execution, agent-written gadgets, and administration. Gadgets can also push to their sockets unprompted, and `kodo publish` runs celld Durable Object classes as gadgets. Phase 6 (autoscaling and observability) waits on upstream celld fixes. Next are Phase 13 (tenancy and hardening) and Phase 14 (a Helm chart); the [plan](plans/gadgets-on-kubernetes.md) has the details.
 
 ## License
 
