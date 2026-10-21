@@ -44,7 +44,7 @@ This page is the map: the pieces, how a request moves between them, where state 
 | **Gatekeeper** | Deployment, `kodo-system` (Go), stateless | The only path from a fleet to the outside. Verifies a fleet's signed call, checks the grant, holds users' tokens as OpenBao ciphertext, makes reads, queues writes/sends/deletes for approval, sends model calls to the inference gateway, writes the audit log, and is the fleet's egress proxy. | [config/README.md#gatekeeper](../config/README.md#gatekeeper) |
 | **Inference gateway** | Envoy AI Gateway, `kodo-inference` | Maps model names to backends, holds their keys, rate-limits per user. Admits only the Gatekeeper. | [deploy/inference](../deploy/inference/README.md) |
 | **Agent** | Deployment, `kodo-system` (Go), stateless | The chat at `app.<domain>/chat/`. Thinks with a model, answers by running JavaScript in ephemeral cells, and writes gadgets as draft Blueprints. Has no authority of its own: it acts with a per-turn token. | [kernel/AGENT.md](../kernel/AGENT.md), [internal/agent](../internal/agent) |
-| **`kodo` CLI** | Developer tool (Go) | `kodo publish` bundles a celld Durable Object class as a gadget and publishes it. | [GADGETS.md#from-a-celld-project](../kernel/GADGETS.md#from-a-celld-project) |
+| **`kodo` CLI** | Developer tool (Go) | `kodo publish` bundles a celld Durable Object class as a gadget and publishes it. | [celld-apps.md](celld-apps.md), [GADGETS.md#from-a-celld-project](../kernel/GADGETS.md#from-a-celld-project) |
 | **Platform services** | Cluster prerequisites | Envoy Gateway (ingress and OIDC), cert-manager (wildcard certificate via DNS-01), an OIDC provider (Dex on k3s), OpenBao, Redis (rate-limit counters), gVisor. | [dependencies.md](dependencies.md) |
 
 ### Vocabulary

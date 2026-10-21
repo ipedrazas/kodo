@@ -48,7 +48,7 @@ A class that extends `DurableObject` from `cloudflare:workers` also runs, but ca
 - **Reach the network.** `fetch()` and `connect()` to anything outside throw. External services are reached only through `this.grants`.
 - **See a token.** A binding's calls are made by the Gatekeeper with the owner's token; the gadget gets the response, never the credential.
 - **See other bindings.** `this.env` holds only `KODO`, which `Gadget` uses to talk to its cell; every call on it is checked against the cell's signed identity, so a gadget can act only for its own cell.
-- **Hold a WebSocket itself** or **set a native alarm.** celld 0.6.0 supports neither inside a gadget, so the cell holds both and passes the events on.
+- **Hold a WebSocket itself** or **set a native alarm.** The cell holds both and passes the events on.
 - **Send, write or delete without its owner.** Every such call waits until the cell's owner approves it; see [Approvals](#approvals).
 - **Run for long.** Each call must answer within 30 s and use at most 5 s of CPU (`GADGET_CALL_TIMEOUT_MS`, `GADGET_CPU_MS`). A call over either limit fails; the gadget restarts on the next call with its storage intact.
 
@@ -179,3 +179,5 @@ bin/kodo publish my-app --class Counter --version 0.1.0   # --dry-run writes the
 The class gets the cell's state, so `state.storage` is the cell's own database, and is reached at `https://<cell>.g.<domain>/` behind the usual login and sharing. The Worker's router and its other classes are left behind: the kernel routes each cell's hostname to its gadget, so what the router did with `idFromName(name)` becomes one cell per name. Only `fetch` is passed on.
 
 `kodo publish` refuses a class that uses `env` bindings or secrets, imports other `cloudflare:` or `node:` modules, sets native alarms or accepts WebSockets, and says why. The class's `env` has no bindings: one it reaches for in a way the checks miss throws when the class runs, and outbound `fetch()` throws as in any gadget. A class that needs those is rewritten against the `Gadget` contract above: grants for the network and models, `this.setAlarm()`, and `onOpen()`, `onMessage()`, `this.send()` and `this.broadcast()` for sockets.
+
+[docs/celld-apps.md](../docs/celld-apps.md) walks through one app, [examples/celld-todos](../examples/celld-todos/README.md), from `celld dev` to a shared cell.

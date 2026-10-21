@@ -93,9 +93,9 @@ func (p *Project) Class(name string) (string, error) {
 	}
 }
 
-// entry is the generated module: an App that extends DurableObject, which
-// celld requires of a facet, around the original class. Its env throws on
-// any binding, so a class that reaches for one fails with a reason.
+// entry is the generated module: an App that extends DurableObject around
+// the original class, which passes on only fetch. Its env throws on any
+// binding, so a class that reaches for one fails with a reason.
 const entry = `import { DurableObject } from "cloudflare:workers";
 import { %[1]s as Original } from %[2]s;
 

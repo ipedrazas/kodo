@@ -91,6 +91,33 @@ func TestBuild(t *testing.T) {
 	}
 }
 
+// The example of docs/celld-apps.md builds as published there, and its
+// golden copy is what the kernel's tests run.
+func TestBuildExample(t *testing.T) {
+	const path = "../../kernel/test/gadgets/celld-todos.js"
+	p, err := Load("../../examples/celld-todos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := p.Build("Todos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *update {
+		if err := os.WriteFile(path, bundle, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(bundle, want) {
+		t.Errorf("the bundle differs from %s; run go test ./internal/celldapp -update", path)
+	}
+}
+
 func TestBuildRefuses(t *testing.T) {
 	p := load(t)
 	for class, want := range map[string]string{
