@@ -55,8 +55,9 @@ kodo is that platform, built once. A Durable Object class becomes a **gadget**, 
 ```sh
 go build -o bin/kodo ./cmd/kodo
 bin/kodo publish examples/celld-todos --class Todos --name todos --version 0.1.0
-kubectl -n kodo wait blueprint/todos-0.1.0 --for=condition=Published
 ```
+
+It waits until the operator reports the Blueprint `Published`, then says how to create a cell.
 
 `--dry-run` writes the gadget, the Blueprint and a kustomization without applying them, so you can review or commit them instead. The class runs unchanged: kodo wraps it in a generated `App` and passes it the cell's storage. The router in `src/index.js` is left behind, because kodo routes by hostname instead.
 
