@@ -22,4 +22,6 @@ go build -o bin/kodo ./cmd/kodo
 bin/kodo publish examples/celld-todos --class Todos --name todos --version 0.1.0
 ```
 
+Unlike the other examples, there is no `blueprint.yaml` here: this is a celld app, not a gadget, and `kodo publish` generates the gadget and its Blueprint from `wrangler.jsonc`. To see what it generates without applying it, add `--dry-run --out <dir>`.
+
 Then create a cell from `todos` at `https://app.<domain>/` and open `https://<cell>.g.<domain>/`. Each item records who added it, from the `x-kodo-email` header the kernel sets.
