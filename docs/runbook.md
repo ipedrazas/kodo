@@ -16,7 +16,7 @@ How to check, deploy, change and repair a running kodo platform. The examples us
 | OpenBao | `openbao.alacasa.uk:8200` (outside the cluster) | Reachable from the cluster |
 | Buckets | Tigris `kodo-dev` (fleet), `kodo-dev-gatekeeper` | `celld diagnose` passes with the fleet key |
 
-Local files the tasks read, all git-ignored: `.env` (Tigris admin key, Cloudflare token, OpenBao AppRole, `OPENROUTER_API_KEY`, `RESEND_*`), `.buckets.env` (the scoped fleet and Gatekeeper keys), `.auth.env` (Dex client secret and the test users' passwords).
+Local files the tasks read, all git-ignored: `.env` (Tigris admin key, Cloudflare token, OpenBao AppRole, `OPENROUTER_API_KEY`, `RESEND_*`), `.buckets.env` (the scoped fleet and Gatekeeper keys), `.auth.env` (the Dex client secret, the tap client's `TAP_CLIENT_SECRET`, which you add by hand, and the test users' passwords).
 
 ## Health check
 
@@ -164,7 +164,7 @@ Find the node named in `fold session node_X/…`, then restart that pod: `kubect
 
 - The IdP's keys must be reachable from fleet nodes: the egress `allow` rule for Dex's `/keys`, and `Fleet.spec.auth.jwksURL`.
 - Clock skew on nodes makes valid tokens look expired.
-- If Dex is crash-looping, check its log for a missing `secretEnv`. `dex.yaml` names `TAP_CLIENT_SECRET` for the `tap` client, which `auth-secrets.sh` does not create: re-running it (as `task k3s:up` does) replaces `dex-secrets` without that key. Add it back to the Secret and restart Dex.
+- If Dex is crash-looping, check its log for a missing `secretEnv`. `dex.yaml` names `TAP_CLIENT_SECRET` for the `tap` client; `auth-secrets.sh` copies it from `.auth.env` into `dex-secrets` and stops if it is missing there. Restart Dex after changing the Secret.
 
 ### Capability calls fail
 

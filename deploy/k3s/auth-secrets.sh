@@ -20,10 +20,14 @@ set -a
 . ./.auth.env
 set +a
 hash() { htpasswd -nbBC 10 x "$1" | cut -d: -f2 | sed 's/^\$2y\$/$2a$/'; }
+# dex.yaml's tap client reads TAP_CLIENT_SECRET; it is tap's, so it is not
+# generated here. Without it Dex does not start.
+[[ -n ${TAP_CLIENT_SECRET:-} ]] || { echo "set TAP_CLIENT_SECRET in .auth.env (the tap client's secret)" >&2; exit 1; }
 
 kubectl create namespace kodo-auth --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n kodo-auth create secret generic dex-secrets \
   --from-literal=DEX_CLIENT_SECRET="$DEX_CLIENT_SECRET" \
+  --from-literal=TAP_CLIENT_SECRET="$TAP_CLIENT_SECRET" \
   --from-literal=ALICE_PASSWORD_HASH="$(hash "$ALICE_PASSWORD")" \
   --from-literal=BOB_PASSWORD_HASH="$(hash "$BOB_PASSWORD")" \
   --from-literal=CAROL_PASSWORD_HASH="$(hash "$CAROL_PASSWORD")" \
