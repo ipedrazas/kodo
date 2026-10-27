@@ -206,10 +206,15 @@ func desiredStatefulSet(f *kodov1.Fleet) *appsv1.StatefulSet {
 	if idle == 0 {
 		idle = 30
 	}
+	ttl := f.Spec.LeaseTTLSeconds
+	if ttl == 0 {
+		ttl = 30
+	}
 	env := append([]corev1.EnvVar{
 		{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"}}},
 		{Name: "CELLD_WATCH", Value: "/var/lib/celld/state"},
 		{Name: "CELLD_IDLE_EVICT_S", Value: strconv.Itoa(int(idle))},
+		{Name: "CELLD_TTL_MS", Value: strconv.Itoa(int(ttl) * 1000)},
 	}, bucketEnv(f)...)
 	if proxy := egressProxy(f); proxy != "" {
 		// HTTPS only: peers, the Gatekeeper and in-cluster services are
