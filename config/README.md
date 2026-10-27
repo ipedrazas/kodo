@@ -29,6 +29,7 @@ spec:
   celld: ghcr.io/denoland/celld:0.6.2     # node image
   kernel: ghcr.io/ipedrazas/kodo-kernel:main
   replicas: 3
+  suspend: false                          # true stops every node; no bucket requests until resumed
   runtimeClassName: gvisor                # optional
   idleEvictSeconds: 30
   leaseTTLSeconds: 30                     # a node halts if it cannot renew its lease for this long

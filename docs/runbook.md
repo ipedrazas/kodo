@@ -146,6 +146,17 @@ Apply a `Blueprint` resource ([config/README.md#blueprint](../config/README.md#b
 
 Apply a `Fleet` ([config/samples/fleet.yaml](../config/samples/fleet.yaml)). The operator adds its key to the Gatekeeper's trust Secret, but the Gatekeeper sees it only after the kubelet refreshes the mount, about 2 minutes. Until then the fleet's calls are refused and audited as `untrusted`.
 
+### Suspend and resume the fleet
+
+A running fleet costs bucket requests even when nobody uses it: on k3s with Tigris, about 6.5 GET, 0.5 PUT and 0.4 LIST a second with two nodes, roughly $20 a month. Most of the GETs do not depend on the node count, so fewer nodes save little; only a suspended fleet makes no requests.
+
+```sh
+kubectl -n kodo patch fleet kodo --type merge -p '{"spec":{"suspend":true}}'   # stop every node
+kubectl -n kodo patch fleet kodo --type merge -p '{"spec":{"suspend":false}}'  # start them again
+```
+
+While suspended, every request to the fleet fails and `Ready` reads `Suspended`. Cells stay in the bucket and are restored on their first request after resuming; the first minute after a start costs a burst of reads.
+
 ## Troubleshooting
 
 ### A cell or the dashboard fails with `RestoreFailed`

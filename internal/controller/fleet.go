@@ -288,6 +288,11 @@ func (r *FleetReconciler) reconcileNodes(ctx context.Context, fleet *kodov1.Flee
 		logger.Info("starting nodes on the new celld image", "image", fleet.Spec.Celld)
 		image = fleet.Spec.Celld
 	}
+	if fleet.Spec.Suspend {
+		// An upgrade still completes: with no nodes running, the next step
+		// moves the image.
+		count = 0
+	}
 
 	// Only the mutable parts of the spec; the selector, service name and
 	// volume templates are fixed at creation.
@@ -379,9 +384,13 @@ func (r *FleetReconciler) updateStatus(ctx context.Context, fleet *kodov1.Fleet,
 		set(ConditionKernelDeployed, false, "Deploying", "job "+job.Name+" is running")
 	}
 
-	ready := !upgrading && status.Kernel == fleet.Spec.Kernel && status.ReadyReplicas == replicas(fleet)
-	set(ConditionReady, ready, map[bool]string{true: "Ready", false: "NotReady"}[ready],
-		fmt.Sprintf("%d of %d nodes ready", status.ReadyReplicas, replicas(fleet)))
+	if fleet.Spec.Suspend {
+		set(ConditionReady, false, "Suspended", fmt.Sprintf("suspended: %d nodes still running", status.ReadyReplicas))
+	} else {
+		ready := !upgrading && status.Kernel == fleet.Spec.Kernel && status.ReadyReplicas == replicas(fleet)
+		set(ConditionReady, ready, map[bool]string{true: "Ready", false: "NotReady"}[ready],
+			fmt.Sprintf("%d of %d nodes ready", status.ReadyReplicas, replicas(fleet)))
+	}
 
 	fleet.Status = *status
 	return r.Status().Update(ctx, fleet)

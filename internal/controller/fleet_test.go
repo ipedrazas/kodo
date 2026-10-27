@@ -231,6 +231,48 @@ func TestCelldUpgradeStopsEveryNodeFirst(t *testing.T) {
 	}
 }
 
+func TestSuspendStopsEveryNode(t *testing.T) {
+	s := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(testFleet()).WithStatusSubresource(&kodov1.Fleet{}).Build()
+	reconcileFleet(t, c, s)
+	ctx := context.Background()
+	key := client.ObjectKey{Namespace: "kodo", Name: "kodo"}
+
+	setSuspend := func(suspend bool) {
+		var fleet kodov1.Fleet
+		if err := c.Get(ctx, key, &fleet); err != nil {
+			t.Fatal(err)
+		}
+		fleet.Spec.Suspend = suspend
+		if err := c.Update(ctx, &fleet); err != nil {
+			t.Fatal(err)
+		}
+		reconcileFleet(t, c, s)
+	}
+	check := func(wantReplicas int32, wantReason string) {
+		t.Helper()
+		var sts appsv1.StatefulSet
+		if err := c.Get(ctx, key, &sts); err != nil {
+			t.Fatal(err)
+		}
+		if *sts.Spec.Replicas != wantReplicas {
+			t.Errorf("replicas %d, want %d", *sts.Spec.Replicas, wantReplicas)
+		}
+		var fleet kodov1.Fleet
+		if err := c.Get(ctx, key, &fleet); err != nil {
+			t.Fatal(err)
+		}
+		if cond := meta.FindStatusCondition(fleet.Status.Conditions, ConditionReady); cond == nil || cond.Reason != wantReason {
+			t.Errorf("Ready condition %+v, want reason %s", cond, wantReason)
+		}
+	}
+
+	setSuspend(true)
+	check(0, "Suspended")
+	setSuspend(false)
+	check(3, "NotReady")
+}
+
 func gatekeeperFleet() *kodov1.Fleet {
 	f := testFleet()
 	f.Spec.Gatekeeper = &kodov1.GatekeeperRef{}
