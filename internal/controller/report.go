@@ -105,6 +105,10 @@ func (r *ClusterReporter) Reconcile(ctx context.Context, req ctrlmgr.Request) (c
 	if !f.DeletionTimestamp.IsZero() {
 		return ctrlmgr.Result{}, nil
 	}
+	if f.Spec.Suspend {
+		// No kernel to tell; it hears on the first report after resuming.
+		return ctrlmgr.Result{RequeueAfter: reportEvery}, nil
+	}
 	report := r.Report(ctx, &f)
 	target, err := kernelTarget(ctx, r.Client, f.Namespace, f.Name)
 	if err == nil {

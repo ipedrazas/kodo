@@ -18,6 +18,9 @@ spec:
     - jsonPath: .status.readyReplicas
       name: Ready
       type: integer
+    - jsonPath: .spec.suspend
+      name: Suspended
+      type: boolean
     - jsonPath: .status.celld
       name: Celld
       type: string
@@ -466,6 +469,12 @@ spec:
                   bucket.
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
+              suspend:
+                description: |-
+                  Suspend stops every node. A suspended fleet serves nothing and makes
+                  no bucket requests; its cells stay in the bucket, and resuming starts
+                  Replicas nodes that restore them on their next request.
+                type: boolean
             required:
             - bucket
             - celld

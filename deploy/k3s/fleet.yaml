@@ -11,7 +11,9 @@ metadata:
 spec:
   celld: ghcr.io/denoland/celld:0.6.2
   kernel: KERNEL_IMAGE
-  replicas: 3
+  # Two is the fewest that keeps writes fast; a third node adds bucket
+  # requests and no capacity a demo needs.
+  replicas: 2
   runtimeClassName: gvisor
   bucket:
     name: kodo-dev

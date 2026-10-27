@@ -24,6 +24,12 @@ type FleetSpec struct {
 	// +optional
 	Replicas int32 `json:"replicas,omitempty"`
 
+	// Suspend stops every node. A suspended fleet serves nothing and makes
+	// no bucket requests; its cells stay in the bucket, and resuming starts
+	// Replicas nodes that restore them on their next request.
+	// +optional
+	Suspend bool `json:"suspend,omitempty"`
+
 	Bucket BucketSpec `json:"bucket"`
 
 	// RuntimeClassName for the nodes, e.g. gvisor.
@@ -193,6 +199,7 @@ type FleetStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
+// +kubebuilder:printcolumn:name="Suspended",type=boolean,JSONPath=`.spec.suspend`
 // +kubebuilder:printcolumn:name="Celld",type=string,JSONPath=`.status.celld`
 // +kubebuilder:printcolumn:name="Kernel",type=string,JSONPath=`.status.kernel`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
