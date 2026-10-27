@@ -35,6 +35,15 @@ type FleetSpec struct {
 	// +optional
 	IdleEvictSeconds int32 `json:"idleEvictSeconds,omitempty"`
 
+	// LeaseTTLSeconds is each node's lease lifetime (celld's CELLD_TTL_MS).
+	// A node that cannot renew it within this time, say because the bucket
+	// stalls, halts itself; a longer lease rides out stalls and renews less
+	// often, but a lost node's cells wait up to this long to move.
+	// +kubebuilder:default=30
+	// +kubebuilder:validation:Minimum=10
+	// +optional
+	LeaseTTLSeconds int32 `json:"leaseTTLSeconds,omitempty"`
+
 	// Resources for each node.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`

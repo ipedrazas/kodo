@@ -374,6 +374,16 @@ spec:
                   Kernel is the kernel image. The operator runs it as a Job that deploys
                   the kernel to the bucket; nodes adopt it without restarting.
                 type: string
+              leaseTTLSeconds:
+                default: 30
+                description: |-
+                  LeaseTTLSeconds is each node's lease lifetime (celld's CELLD_TTL_MS).
+                  A node that cannot renew it within this time, say because the bucket
+                  stalls, halts itself; a longer lease rides out stalls and renews less
+                  often, but a lost node's cells wait up to this long to move.
+                format: int32
+                minimum: 10
+                type: integer
               replicas:
                 default: 3
                 description: Replicas is the number of celld nodes. Two or more make

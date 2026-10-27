@@ -31,6 +31,7 @@ spec:
   replicas: 3
   runtimeClassName: gvisor                # optional
   idleEvictSeconds: 30
+  leaseTTLSeconds: 30                     # a node halts if it cannot renew its lease for this long
   bucket:
     name: kodo-dev                        # bucket[/prefix]
     endpoint: https://t3.storage.dev      # omit for AWS S3

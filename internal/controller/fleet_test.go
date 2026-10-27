@@ -92,6 +92,9 @@ func TestStatefulSet(t *testing.T) {
 	if ref := env["AWS_SECRET_ACCESS_KEY"].ValueFrom; ref == nil || ref.SecretKeyRef.Name != "bucket" {
 		t.Error("credentials do not come from the bucket Secret")
 	}
+	if got := env["CELLD_TTL_MS"].Value; got != "30000" {
+		t.Errorf("CELLD_TTL_MS %q, want the 30 s default", got)
+	}
 }
 
 func TestNetworkPolicyConfinesInternalListener(t *testing.T) {
