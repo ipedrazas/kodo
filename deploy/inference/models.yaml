@@ -43,7 +43,7 @@ spec:
               value: agent
       backendRefs:
         - name: openrouter
-          modelNameOverride: deepseek/deepseek-v4-flash
+          modelNameOverride: ~deepseek/deepseek-flash-latest
       # The agent writes a whole gadget in one answer: up to its output limit
       # (16384) at the 230-400 tokens/s DeepSeek gives.
       timeouts:
