@@ -48,6 +48,18 @@ spec:
       # (16384) at the 230-400 tokens/s DeepSeek gives.
       timeouts:
         request: 120s
+    - name: verifier
+      matches:
+        - headers:
+            - name: x-ai-eg-model
+              value: verifier
+      backendRefs:
+        - name: openrouter
+          modelNameOverride: typesafe/jev-1.14
+      # The agent writes a whole gadget in one answer: up to its output limit
+      # (16384) at the 230-400 tokens/s DeepSeek gives.
+      timeouts:
+        request: 120s
     - name: sim
       matches:
         - headers:
