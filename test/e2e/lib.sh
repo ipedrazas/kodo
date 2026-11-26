@@ -63,7 +63,7 @@ except ValueError:
     pass' "$1"
 }
 
-login() { # login USER: sign in as <USER>@$EMAIL_DOMAIN, unless USER still is
+login() { # login USER: sign in as <USER>@$EMAIL_DOMAIN, unless USER still is signed in
   local user=$1 email=$1@$EMAIL_DOMAIN who secret location form challenge started verified next try
   who=$(c "$user" "$APP/api/whoami" 2>/dev/null || true)
   if [[ -z ${FRESH_LOGIN:-} && $who == *"\"email\":\"$email\""* ]]; then
@@ -97,13 +97,30 @@ login() { # login USER: sign in as <USER>@$EMAIL_DOMAIN, unless USER still is
   [[ $next == /* ]] && next=$IDP$next
   # Authrim finishes the authorization and redirects to the gateway's
   # callback, which sets the session cookie and returns to the first URL.
-  for try in 1 2 3 4 5; do
+  # The first time, it asks the user to let kodo see their profile and
+  # email; a test user agrees.
+  for try in 1 2 3 4 5 6; do
     [[ $next == "$APP/"* ]] && break
     [[ $next == "$IDP/"* ]] || fail "login for $user was redirected to: $next"
-    next=$(idp "$user" -o /dev/null -w '%{redirect_url}' "$next")
+    if [[ $next == "$IDP/consent?"*challenge_id=* ]]; then
+      challenge=${next#*challenge_id=}
+      next=$(idp "$user" -H 'content-type: application/json' -d "{\"challenge_id\":\"${challenge%%&*}\",\"approved\":true}" "$IDP/auth/consent")
+      [[ -n $(field redirect_url <<<"$next") ]] || fail "Authrim refused $user's consent: $next"
+      next=$(field redirect_url <<<"$next")
+      [[ $next == /* ]] && next=$IDP$next
+    else
+      next=$(idp "$user" -o /dev/null -w '%{redirect_url}' "$next")
+    fi
   done
   [[ $next == "$APP/oauth2/callback?"* ]] || fail "login for $user did not return to the gateway: $next"
   who=$(c "$user" -L "$next")
+  # The gateway says this when Authrim refuses it the tokens, which it does
+  # for a few seconds after several sign-ins in a row.
+  if [[ $who == "OAuth flow failed."* && -z ${2:-} ]]; then
+    sleep 15
+    login "$user" again
+    return
+  fi
   [[ $who == *"\"email\":\"$email\""* ]] || fail "login for $user ended with: $who"
   echo "$user logged in: $who"
 }
