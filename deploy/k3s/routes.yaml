@@ -43,11 +43,13 @@ spec:
       name: kodo-agent
   oidc:
     provider:
-      issuer: https://auth.hiddenfield.dev
-    clientID: kodo
+      issuer: https://auth.applet.one
+    # The Authrim client "kodo", the same one the public login uses
+    # (public.yaml); its Secret is created by task k3s:tunnel.
+    clientID: 21273353-a720-408d-a439-62b1acf1613f
     clientSecret:
       # The key must be client-secret.
-      name: oidc-client
+      name: oidc-client-authrim
     scopes: [openid, email, profile, offline_access]
     redirectURL: https://app.hiddenfield.dev/oauth2/callback
     logoutPath: /logout
