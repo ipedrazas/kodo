@@ -44,7 +44,7 @@ cleanup() {
 trap cleanup EXIT
 
 step "Log in and connect GitHub"
-login alice "$ALICE_PASSWORD"
+login alice
 out=$(gk alice PUT /connections/github "{\"token\":\"$GITHUB_TOKEN\"}")
 [[ $(tail -1 <<<"$out") == 200 ]] || fail "connecting GitHub: $out"
 account=$(head -1 <<<"$out" | json 'd["account"]')
@@ -120,7 +120,7 @@ GK=http://kodo-gatekeeper.kodo-system.svc:8081
 code=0
 kubectl -n "$SCRATCH" exec outsider -- curl -s -m 5 -o /dev/null "$GK/healthz" || code=$?
 [[ $code == 7 || $code == 28 ]] || fail "a pod outside any fleet reached the internal port (curl exit $code)"
-body="{\"workspace\":\"team\",\"cell\":\"$caps\",\"blueprint\":\"caps\",\"version\":\"e2e\",\"owner\":{\"user\":\"x\",\"email\":\"alice@$DOMAIN\"},\"grants\":[\"$GRANT\"],\"capability\":\"$GRANT\",\"request\":{\"method\":\"GET\",\"path\":\"\"}}"
+body="{\"workspace\":\"team\",\"cell\":\"$caps\",\"blueprint\":\"caps\",\"version\":\"e2e\",\"owner\":{\"user\":\"x\",\"email\":\"alice@$EMAIL_DOMAIN\"},\"grants\":[\"$GRANT\"],\"capability\":\"$GRANT\",\"request\":{\"method\":\"GET\",\"path\":\"\"}}"
 signed() { # signed FLEET KEY: POST the call as FLEET signed with KEY
   local ts sig
   ts=$(date +%s)
@@ -141,15 +141,15 @@ tunnel() { # tunnel HOST:PORT: the egress proxy's answer to CONNECT
     "exec 3<>/dev/tcp/kodo-gatekeeper.kodo-system.svc/8082; printf 'CONNECT $1 HTTP/1.1\r\nHost: $1\r\n\r\n' >&3; head -1 <&3" |
     tr -d '\r'
 }
-for target in "1.1.1.1 443" "api.github.com 443" "t3.storage.dev 443" "dex.kodo-auth.svc 80"; do
+for target in "1.1.1.1 443" "api.github.com 443" "t3.storage.dev 443" "auth.applet.one 443" "dex.kodo-auth.svc 5556"; do
   # shellcheck disable=SC2086
   if probe $target; then fail "kodo-0 reached $target directly"; fi
 done
 probe kodo-gatekeeper.kodo-system.svc 8081 || fail "kodo-0 cannot reach the Gatekeeper"
-probe dex.kodo-auth.svc 5556 || fail "kodo-0 cannot reach Dex's keys"
 [[ $(tunnel api.github.com:443) == *" 403 "* ]] || fail "the egress proxy tunnelled to GitHub"
 [[ $(tunnel t3.storage.dev:443) == *" 200 "* ]] || fail "the egress proxy does not tunnel to the bucket"
-echo "direct: 1.1.1.1, GitHub, Tigris blocked; Gatekeeper and Dex open; proxy: Tigris only"
+[[ $(tunnel "${IDP#https://}:443") == *" 200 "* ]] || fail "the egress proxy does not tunnel to Authrim's keys"
+echo "direct: 1.1.1.1, GitHub, Tigris, Authrim and Dex blocked; Gatekeeper open; proxy: Tigris and Authrim only"
 
 step "Tokens are ciphertext, only in the Gatekeeper's bucket, and never in a fleet"
 key=$(as_gatekeeper aws s3 ls "s3://$GK_BUCKET/vault/" --recursive | awk '/github.json$/ {print $4}' | head -1)

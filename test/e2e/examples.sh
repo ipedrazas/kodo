@@ -26,8 +26,8 @@ cleanup() {
 trap cleanup EXIT
 
 step "Log in and publish both examples"
-login alice "$ALICE_PASSWORD"
-login bob "$BOB_PASSWORD"
+login alice
+login bob
 kubectl -n kodo apply -k examples/daybreak >/dev/null
 kubectl -n kodo apply -k examples/hn-reader >/dev/null
 cat <<YAML | kubectl apply -f - >/dev/null
@@ -43,7 +43,7 @@ echo "daybreak 1.0.2 and hn-reader 1.0.2 published"
 step "Daybreak: a circle of two finds time and meets"
 daybreak=$(ok "$(api alice POST /workspaces/team/cells '{"blueprint":"daybreak"}')" 201 "creating the circle" | json 'd["id"]')
 gadget bob "$daybreak" GET /api/state | tail -1 | grep -qx 403 || fail "bob could open the circle before it was shared"
-ok "$(api alice PUT "/workspaces/team/cells/$daybreak/shares/bob@$DOMAIN" '{"role":"editor"}')" 200 "sharing with bob" >/dev/null
+ok "$(api alice PUT "/workspaces/team/cells/$daybreak/shares/bob@$EMAIL_DOMAIN" '{"role":"editor"}')" 200 "sharing with bob" >/dev/null
 members=$(ok "$(gadget bob "$daybreak" GET /api/state)" 200 "bob opening the circle" | json '[m["email"] for m in d["members"]]')
 echo "circle $daybreak shared with bob; members after his first visit: $members"
 at() { python3 -c "import datetime as t; d = t.datetime.now(t.timezone.utc) + t.timedelta(days=2); print(int(d.replace(hour=$1, minute=0, second=0, microsecond=0).timestamp() * 1000))"; }
@@ -53,7 +53,7 @@ body=$(free 17 21)
 ok "$(gadget alice "$daybreak" POST /api/slots "$body")" 200 "alice's free time" >/dev/null
 body=$(free 19 23)
 state=$(ok "$(gadget bob "$daybreak" POST /api/slots "$body")" 200 "bob's free time")
-[[ $(json '[(w["with"], w["start"], w["end"]) for w in d["windows"]]' <<<"$state") == "[('alice@$DOMAIN', $(at 19), $(at 21))]" ]] ||
+[[ $(json '[(w["with"], w["start"], w["end"]) for w in d["windows"]]' <<<"$state") == "[('alice@$EMAIL_DOMAIN', $(at 19), $(at 21))]" ]] ||
   fail "bob's shared windows: $state"
 echo "alice free 17:00-21:00, bob 19:00-23:00 (UTC, in two days): bob sees 19:00-21:00 free together"
 body=$(printf '{"with":"alice@%s","start":%s,"end":%s,"title":"kodo e2e dinner"}' "$DOMAIN" "$(at 19)" "$(at 20)")

@@ -17,8 +17,8 @@ cleanup() {
 trap cleanup EXIT
 
 step "Log in and publish the chat example"
-login alice "$ALICE_PASSWORD"
-login bob "$BOB_PASSWORD"
+login alice
+login bob
 kubectl -n kodo apply -k examples/chat >/dev/null
 cat <<YAML | kubectl apply -f - >/dev/null
 apiVersion: kodo.dev/v1alpha1
@@ -32,7 +32,7 @@ echo "chat 1.0.0 published"
 
 step "Alice opens a room and shares it with bob"
 room=$(ok "$(api alice POST /workspaces/team/cells '{"blueprint":"chat"}')" 201 "creating the room" | json 'd["id"]')
-ok "$(api alice PUT "/workspaces/team/cells/$room/shares/bob@$DOMAIN" '{"role":"editor"}')" 200 "sharing with bob" >/dev/null
+ok "$(api alice PUT "/workspaces/team/cells/$room/shares/bob@$EMAIL_DOMAIN" '{"role":"editor"}')" 200 "sharing with bob" >/dev/null
 echo "room $room shared with bob as editor"
 
 step "Lines through the gateway, then a quiet socket"

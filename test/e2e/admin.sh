@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # End-to-end test of administration on the k3s cluster, through the real
-# gateway, Dex, fleet, operator, agent, Gatekeeper and inference gateway (the
+# gateway, Authrim, fleet, operator, agent, Gatekeeper and inference gateway (the
 # simulator, which is free). Checks each Phase 12 acceptance criterion.
 # Expects `task k3s:up` with the agent, Phase 12 images, and:
-#   .auth.env   the test users' passwords; carol is the platform admin
-#               (deploy/k3s/fleet.yaml), alice and bob are not
+#   .auth.env   the test users' authenticator secrets; carol must be a
+#               platform admin (carol@$EMAIL_DOMAIN in the Fleet's
+#               spec.admins.emails), alice and bob not
 # It switches the agent to the simulator for one turn, gives bob a test
 # suspension, and withdraws a test Blueprint version; all are undone on exit.
 set -euo pipefail
@@ -12,7 +13,7 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
 # shellcheck source=test/e2e/lib.sh
 . test/e2e/lib.sh
-: "${CAROL_PASSWORD:?run deploy/k3s/auth-secrets.sh: carol has no password}"
+: "${CAROL_TOTP_SECRET:?run deploy/k3s/authrim-test-users.sh: carol has no authenticator secret}"
 run=$(date -u +%Y%m%d%H%M%S)
 WS=admin-e2e
 # macOS bash 3.2 brace-expands JSON with commas inside "$(...)", so bodies
@@ -51,9 +52,9 @@ cleanup() {
 trap cleanup EXIT
 
 step "Log in"
-login alice "$ALICE_PASSWORD" >/dev/null
-login bob "$BOB_PASSWORD" >/dev/null
-login carol "$CAROL_PASSWORD" >/dev/null
+login alice >/dev/null
+login bob >/dev/null
+login carol >/dev/null
 bob_sub=$(api bob GET /whoami | head -1 | json 'd["user"]')
 echo "alice, bob and carol logged in"
 
@@ -79,27 +80,27 @@ MEMBERS=$members python3 -c '
 import json, os
 m = {x["email"]: x for x in json.loads(os.environ["MEMBERS"])["members"]}
 for who in ("alice", "bob"):
-    e = f"{who}@hiddenfield.dev"
+    e = who + "@" + os.environ["EMAIL_DOMAIN"]
     assert m.get(e, {}).get("role") in ("member", "admin"), (e, m)
 print("team:", ", ".join(e + " (" + x["role"] + ", added by " + x["addedBy"] + ")" for e, x in sorted(m.items())))' || fail "team's members: $members"
 
 step "A workspace admin manages members, quota and docs of their workspace and nothing beyond it"
-create_ws="{\"quota\":5,\"members\":{\"alice@$DOMAIN\":\"admin\"}}"
+create_ws="{\"quota\":5,\"members\":{\"alice@$EMAIL_DOMAIN\":\"admin\"}}"
 ok "$(api carol PUT "/workspaces/$WS" "$create_ws")" 200 "carol creating $WS" >/dev/null
-api alice DELETE "/workspaces/$WS/members/bob@$DOMAIN" >/dev/null 2>&1 || true
+api alice DELETE "/workspaces/$WS/members/bob@$EMAIL_DOMAIN" >/dev/null 2>&1 || true
 [[ $(api alice GET "/workspaces/$WS" | head -1 | json 'd["role"]') == admin ]] || fail "alice is not $WS's admin"
 [[ $(code "$(api bob POST "/workspaces/$WS/cells" "$fixture_e2e")") == 403 ]] || fail "bob, not a member, created a cell"
 [[ $(code "$(chat bob POST "/workspaces/$WS/sessions" '{}')") == 403 ]] || fail "bob, not a member, started a chat"
 echo "bob, not a member, can create neither cells nor chats in $WS"
-ok "$(api alice PUT "/workspaces/$WS/members/bob@$DOMAIN" '{"role":"member"}')" 200 "alice adding bob" >/dev/null
+ok "$(api alice PUT "/workspaces/$WS/members/bob@$EMAIL_DOMAIN" '{"role":"member"}')" 200 "alice adding bob" >/dev/null
 bobs=$(ok "$(api bob POST "/workspaces/$WS/cells" "$fixture_e2e")" 201 "bob's cell, as a member" | json 'd["id"]')
 cells+=("$bobs")
 [[ $(api alice PUT "/workspaces/$WS" '{"quota":7}' | head -1 | json 'd["quota"]') == 7 ]] || fail "alice setting the quota"
 ok "$(c alice -X PUT -H "Origin: $APP" -H 'content-type: text/markdown' --data-binary $'# Admin e2e\n\nRun '"$run" -w '\n%{http_code}' "$APP/api/workspaces/$WS/docs/e2e.md")" 200 "alice writing a doc" >/dev/null
 [[ $(api bob GET "/workspaces/$WS/docs/e2e.md" | head -1) == "# Admin e2e" ]] || fail "bob reading the doc"
-[[ $(code "$(api bob PUT "/workspaces/$WS/members/carol@$DOMAIN" '{"role":"member"}')") == 403 ]] || fail "bob, a member, managed members"
+[[ $(code "$(api bob PUT "/workspaces/$WS/members/carol@$EMAIL_DOMAIN" '{"role":"member"}')") == 403 ]] || fail "bob, a member, managed members"
 [[ $(code "$(api alice PUT /workspaces/team '{"quota":1}')") == 403 ]] || fail "alice changed team"
-[[ $(code "$(api alice PUT "/workspaces/team/members/x@$DOMAIN" '{"role":"member"}')") == 403 ]] || fail "alice managed team's members"
+[[ $(code "$(api alice PUT "/workspaces/team/members/x@$EMAIL_DOMAIN" '{"role":"member"}')") == 403 ]] || fail "alice managed team's members"
 echo "alice, $WS's admin, added bob, set the quota to 7 and wrote a doc; team is not hers"
 
 step "Changing the agent's model or output limit applies to the next turn without a restart"
@@ -205,8 +206,8 @@ echo "carol published a Blueprint, created a workspace, read every cell's usage 
 step "Every admin action is in the audit log with who did it, searchable from the dashboard"
 search() { api carol GET "/admin/audit?decision=admin&days=1&limit=200&$1" | head -1; }
 found() {
-  search "user=carol@$DOMAIN" > "$results/admin-audit-carol.json"
-  search "user=alice@$DOMAIN&workspace=$WS" > "$results/admin-audit-alice.json"
+  search "user=carol@$EMAIL_DOMAIN" > "$results/admin-audit-carol.json"
+  search "user=alice@$EMAIL_DOMAIN&workspace=$WS" > "$results/admin-audit-alice.json"
   python3 - "$results/admin-audit-carol.json" "$results/admin-audit-alice.json" "$run" "$bob_sub" <<'PY'
 import json, sys
 carol, alice = (json.load(open(p))["records"] for p in sys.argv[1:3])

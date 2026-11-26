@@ -96,8 +96,8 @@ PY
 }
 
 step "Log in and open a chat"
-login alice "$ALICE_PASSWORD"
-login bob "$BOB_PASSWORD"
+login alice
+login bob
 out=$(chat alice POST /workspaces/team/sessions '{}')
 [[ $(code "$out") == 201 ]] || fail "creating a session: $out"
 sid=$(body "$out" | json 'd["id"]')

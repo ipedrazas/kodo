@@ -64,8 +64,8 @@ wait_for() { # wait_for SECONDS WHAT COMMAND...: until COMMAND succeeds
 }
 
 step "Log in and publish the ask gadget"
-login alice "$ALICE_PASSWORD"
-login bob "$BOB_PASSWORD"
+login alice
+login bob
 bob_sub=$(c bob "$APP/api/whoami" | json 'd["user"]')
 kubectl -n kodo apply -k examples/ask >/dev/null
 cat <<YAML | kubectl apply -f - >/dev/null
