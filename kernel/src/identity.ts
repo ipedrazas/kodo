@@ -1,11 +1,15 @@
 import { type AuthConfig, authConfig } from "./config";
 import type { Env } from "./env";
 import { sha256Hex } from "./http";
+import { platform } from "./platform";
 import { TURN_HEADER, verifyTurn } from "./turn";
 
 // The gateway forwards the caller's OIDC ID token in this header; the
-// operator sends its admin token in the other.
+// operator sends its admin token in the other. Where the kernel has a
+// userinfo endpoint, the gateway also forwards the caller's access token, as
+// a bearer token in Authorization.
 export const IDENTITY_HEADER = "x-kodo-identity";
+export const ACCESS_HEADER = "authorization";
 export const ADMIN_HEADER = "x-kodo-admin-token";
 
 // A turn is the agent acting for a session's owner during one turn of the
@@ -42,14 +46,82 @@ export async function identify(request: Request, env: Env): Promise<Caller> {
   if (!config.issuer || !config.audience || !config.jwksUrl) {
     throw new IdentityError("the kernel has no identity provider configured");
   }
-  const claims = await verifyJwt(token, config);
-  if (typeof claims.sub !== "string" || !claims.sub) throw new IdentityError("token has no subject");
+  let claims = await verifyJwt(token, config);
+  const user = claims.sub;
+  if (typeof user !== "string" || !user) throw new IdentityError("token has no subject");
+  if (typeof claims.email !== "string" && config.userinfoUrl) {
+    const known = await emailOf(env, config.userinfoUrl, user, bearer(request));
+    if (known) claims = { ...claims, email: known.email, email_verified: known.verified ?? undefined };
+  }
   // Shares and workspace roles are keyed by email, so an email the IdP says
   // is unverified is not used at all.
   const email = typeof claims.email === "string" && claims.email_verified !== false ? claims.email.toLowerCase() : "";
-  const caller: Caller = { kind: "user", user: claims.sub, email };
+  const caller: Caller = { kind: "user", user, email };
   if (isPlatformAdmin(claims, email, config)) caller.platformAdmin = true;
   return caller;
+}
+
+// An issuer may leave the email out of its ID tokens and give it only at its
+// userinfo endpoint, to whoever holds the user's access token. The kernel
+// then asks there, for the subject the ID token named, and remembers the
+// answer in the platform's store: a call that arrives without the access
+// token, such as the agent's, finds the email there.
+interface KnownEmail {
+  email: string;
+  verified: boolean | null;
+}
+
+const EMAIL_TTL_MS = 10 * 60_000;
+const EMAIL_RETRY_MS = 60_000;
+// By subject, per isolate: what is known, and when to ask again.
+const emails = new Map<string, { known: KnownEmail | null; until: number }>();
+
+function bearer(request: Request): string {
+  const match = /^Bearer\s+(\S+)$/i.exec(request.headers.get(ACCESS_HEADER) ?? "");
+  return match ? match[1] : "";
+}
+
+async function emailOf(env: Env, url: string, sub: string, access: string): Promise<KnownEmail | null> {
+  const cached = emails.get(sub);
+  if (cached && Date.now() < cached.until) return cached.known;
+  if (emails.size > 10_000) emails.clear();
+  let known: KnownEmail | null = null;
+  let fresh = false;
+  if (access) {
+    try {
+      known = await userinfo(url, sub, access);
+      fresh = true;
+    } catch (err) {
+      console.log(`userinfo failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  try {
+    if (fresh && known) {
+      const stored = cached?.known;
+      if (!stored || stored.email !== known.email || stored.verified !== known.verified) {
+        await platform(env).setEmail(sub, known.email, known.verified);
+      }
+    } else if (!fresh) {
+      known = await platform(env).email(sub);
+    }
+  } catch (err) {
+    console.log(`the email store failed: ${err instanceof Error ? err.message : err}`);
+  }
+  // Without an answer from the provider, ask again soon.
+  emails.set(sub, { known, until: Date.now() + (fresh ? EMAIL_TTL_MS : EMAIL_RETRY_MS) });
+  return known;
+}
+
+// The email the provider gives for the holder of an access token, or null
+// if it gives none. The token must be the same user's as the ID token: a
+// client must not gain another user's email by sending their own token.
+async function userinfo(url: string, sub: string, access: string): Promise<KnownEmail | null> {
+  const res = await fetch(url, { headers: { authorization: `Bearer ${access}`, accept: "application/json" } });
+  if (!res.ok) throw new IdentityError(`userinfo answered ${res.status}`);
+  const body = (await res.json()) as Record<string, unknown>;
+  if (body.sub !== sub) throw new IdentityError("userinfo is for another subject");
+  if (typeof body.email !== "string" || !body.email) return null;
+  return { email: body.email, verified: typeof body.email_verified === "boolean" ? body.email_verified : null };
 }
 
 // Whether a verified token names a platform admin: a member of the

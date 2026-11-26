@@ -59,6 +59,9 @@ spec:
       accessToken: kodo-access
     forwardIDToken:
       header: x-kodo-identity
+    # As a bearer token in Authorization: the kernel and the Gatekeeper ask
+    # Authrim's userinfo endpoint for the email, which is not in the ID token.
+    forwardAccessToken: true
     refreshToken: true
 ---
 # The Gatekeeper's page and API, where users connect accounts. Only on the

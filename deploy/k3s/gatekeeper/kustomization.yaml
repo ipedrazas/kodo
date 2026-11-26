@@ -19,6 +19,8 @@ configMapGenerator:
       # The Authrim client "kodo".
       - OIDC_AUDIENCE=21273353-a720-408d-a439-62b1acf1613f
       - OIDC_JWKS_URL=https://auth.applet.one/.well-known/jwks.json
+      # Authrim's ID tokens carry no email; it labels the audit records.
+      - OIDC_USERINFO_URL=https://auth.applet.one/userinfo
       # Tigris answers on t3.storage.dev and on <bucket>.t3.storage.dev;
       # auth.applet.one is Authrim's signing keys, for the fleet's kernel.
       - GATEKEEPER_EGRESS_ALLOW=t3.storage.dev:443,*.t3.storage.dev:443,auth.applet.one:443

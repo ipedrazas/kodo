@@ -76,6 +76,14 @@ export class Platform extends DurableObject<Env> {
       suspended_at INTEGER,
       suspended_by TEXT
     )`);
+    // The email the identity provider's userinfo endpoint gave for a user
+    // whose ID token carries none; see identity.ts.
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS emails (
+      user TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      verified INTEGER,
+      fetched_at INTEGER NOT NULL
+    )`);
     // Model spend by month, per user (key: subject) and per workspace (key:
     // name).
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS spend (
@@ -132,6 +140,26 @@ export class Platform extends DurableObject<Env> {
       email,
       now,
       now,
+    );
+  }
+
+  // The email last learned from the identity provider for a user, and
+  // whether the provider said it is verified (null: it did not say).
+  email(user: string): { email: string; verified: boolean | null } | null {
+    const row = this.ctx.storage.sql
+      .exec<{ email: string; verified: number | null }>("SELECT email, verified FROM emails WHERE user = ?", user)
+      .toArray()[0];
+    return row ? { email: row.email, verified: row.verified === null ? null : row.verified === 1 } : null;
+  }
+
+  setEmail(user: string, email: string, verified: boolean | null): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO emails (user, email, verified, fetched_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (user) DO UPDATE SET email = excluded.email, verified = excluded.verified, fetched_at = excluded.fetched_at`,
+      user,
+      email,
+      verified === null ? null : verified ? 1 : 0,
+      Date.now(),
     );
   }
 

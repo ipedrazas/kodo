@@ -1,11 +1,12 @@
 import { ADMIN_PAGE } from "./admin-page";
 import { api } from "./api";
+import { authConfig } from "./config";
 import type { Env } from "./env";
 import { HOME_PAGE } from "./home";
 import { SETTINGS_PAGE } from "./settings";
 import { cellFromHost } from "./hostname";
 import { CALLER_HEADER, CELL_HEADER, text } from "./http";
-import { IdentityError, identify, isAdmin } from "./identity";
+import { ACCESS_HEADER, IdentityError, identify, isAdmin } from "./identity";
 import { noteUser, platformView } from "./platform";
 
 export { Catalog } from "./catalog";
@@ -63,8 +64,11 @@ export default {
     }
 
     const headers = new Headers();
+    // The gateway's headers stay here: no gadget sees the ID token, nor the
+    // access token forwarded for the userinfo endpoint.
+    const access = authConfig(env).userinfoUrl ? ACCESS_HEADER : "";
     for (const [name, value] of request.headers) {
-      if (!name.startsWith("x-kodo-")) headers.set(name, value);
+      if (!name.startsWith("x-kodo-") && name.toLowerCase() !== access) headers.set(name, value);
     }
     stripSessionCookies(headers);
     headers.set(CALLER_HEADER, JSON.stringify(caller));

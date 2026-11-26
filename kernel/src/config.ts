@@ -10,6 +10,9 @@ export interface AuthConfig {
   audience: string;
   // Where the issuer's signing keys are fetched from; may be an in-cluster URL.
   jwksUrl: string;
+  // The issuer's userinfo endpoint, for an issuer that leaves the email out
+  // of its ID tokens; empty for none. See identity.ts.
+  userinfoUrl: string;
   // SHA-256 (hex) of the admin token the operator uses, or empty for none.
   adminTokenSha256: string;
   // Platform admins: members of this IdP group, as listed in the token's
@@ -25,6 +28,7 @@ export function authConfig(env: Env): AuthConfig {
     issuer: env.OIDC_ISSUER ?? DEPLOY_CONFIG.issuer,
     audience: env.OIDC_AUDIENCE ?? DEPLOY_CONFIG.audience,
     jwksUrl: env.OIDC_JWKS_URL ?? DEPLOY_CONFIG.jwksUrl,
+    userinfoUrl: env.OIDC_USERINFO_URL ?? DEPLOY_CONFIG.userinfoUrl,
     adminTokenSha256: env.ADMIN_TOKEN_SHA256 ?? DEPLOY_CONFIG.adminTokenSha256,
     adminGroup: env.PLATFORM_ADMIN_GROUP ?? DEPLOY_CONFIG.adminGroup,
     adminGroupsClaim: env.PLATFORM_ADMIN_GROUPS_CLAIM || DEPLOY_CONFIG.adminGroupsClaim || "groups",

@@ -27,9 +27,13 @@ spec:
     audience: 21273353-a720-408d-a439-62b1acf1613f
     # Outside the cluster: fetched through the Gatekeeper's egress proxy.
     jwksURL: https://auth.applet.one/.well-known/jwks.json
-  # Platform admins, at /admin/, by the email they sign in to Authrim with.
-  # None yet: add `admins: {emails: [<address>]}` once Authrim puts the email
-  # in the ID token (docs/public-access.md, 3.4).
+    # Authrim leaves the email out of its ID tokens: the kernel asks here,
+    # with the access token the gateway forwards (routes.yaml).
+    userinfoURL: https://auth.applet.one/userinfo
+  # Platform admins, at /admin/, are named by the email they sign in to
+  # Authrim with. This repository is public, so they are set on the cluster
+  # and not here; applying this file leaves them as they are:
+  #   kubectl -n kodo patch fleet kodo --type merge -p '{"spec":{"admins":{"emails":["<address>"]}}}'
   # The inference gateway's models and rate limits, which the operator
   # reports to the kernel for the dashboard.
   inference: {}

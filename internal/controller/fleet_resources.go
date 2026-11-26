@@ -97,6 +97,10 @@ func kernelJobName(f *kodov1.Fleet) string {
 	key := f.Spec.Kernel
 	if a := f.Spec.Auth; a != nil {
 		key += "|" + a.Issuer + "|" + a.Audience + "|" + a.JWKSURL
+		// Only when set, so a Fleet without it keeps its Job.
+		if a.UserinfoURL != "" {
+			key += "|" + a.UserinfoURL
+		}
 	}
 	if g := gatekeeper(f); g != nil {
 		key += "|" + gatekeeperURL(g)
@@ -164,6 +168,9 @@ func kernelAuthEnv(f *kodov1.Fleet) []corev1.EnvVar {
 			corev1.EnvVar{Name: "OIDC_AUDIENCE", Value: a.Audience},
 			corev1.EnvVar{Name: "OIDC_JWKS_URL", Value: jwks},
 		)
+		if a.UserinfoURL != "" {
+			env = append(env, corev1.EnvVar{Name: "OIDC_USERINFO_URL", Value: a.UserinfoURL})
+		}
 	}
 	if a := f.Spec.Admins; a != nil {
 		env = append(env,

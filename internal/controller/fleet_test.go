@@ -387,3 +387,27 @@ func TestEgressPolicy(t *testing.T) {
 		t.Error("egress policy kept after the Fleet dropped egress")
 	}
 }
+
+func TestKernelUserinfoURL(t *testing.T) {
+	f := testFleet()
+	f.Spec.Auth = &kodov1.AuthSpec{Issuer: "https://auth.example.com", Audience: "kodo"}
+	without := kernelJobName(f)
+	for _, e := range desiredKernelJob(f).Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "OIDC_USERINFO_URL" {
+			t.Error("OIDC_USERINFO_URL is set for a Fleet without a userinfo endpoint")
+		}
+	}
+	f.Spec.Auth.UserinfoURL = "https://auth.example.com/userinfo"
+	var got string
+	for _, e := range desiredKernelJob(f).Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "OIDC_USERINFO_URL" {
+			got = e.Value
+		}
+	}
+	if got != "https://auth.example.com/userinfo" {
+		t.Errorf("OIDC_USERINFO_URL = %q", got)
+	}
+	if kernelJobName(f) == without {
+		t.Error("setting the userinfo endpoint reuses the old deploy Job")
+	}
+}

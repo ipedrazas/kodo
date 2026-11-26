@@ -44,6 +44,7 @@ spec:
     issuer: https://auth.example.com
     audience: kodo                        # the OIDC client id the gateway uses
     jwksURL: http://dex.auth.svc:5556/keys  # optional; defaults to <issuer>/keys
+    userinfoURL: https://auth.example.com/userinfo  # optional; for an issuer whose ID tokens carry no email
   admins:                                 # optional; the platform admins, at app.<domain>/admin/
     group: kodo-admins                    # an IdP group
     groupsClaim: groups                   # the ID token claim listing groups (default)
