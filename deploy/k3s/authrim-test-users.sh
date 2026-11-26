@@ -8,9 +8,16 @@
 # In Authrim's Admin UI, first: Authentication Methods, Authenticator App,
 # tick Login and Signup, TOTP preset Compatible, Save. Afterwards:
 #   - untick Signup again: it lets anyone create an account;
-#   - End Users: mark each of the three addresses as verified. kodo ignores
-#     an email the identity provider has not verified, so until then the
-#     users sign in with no email and the tests fail at login.
+#   - mark each of the three addresses as verified. kodo ignores an email
+#     the identity provider has not verified, so until then the users sign
+#     in with no email and the tests fail at login. The Admin UI (0.5.0) has
+#     no control for it; its API does. Signed in to the Admin UI, in the
+#     browser's console, for each user ID (End Users shows them):
+#       await fetch("https://auth.applet.one/api/admin/users/<id>", {
+#         method: "PUT", credentials: "include",
+#         headers: {"Content-Type": "application/json", "X-Tenant-Id": "default",
+#                   "Idempotency-Key": crypto.randomUUID()},
+#         body: JSON.stringify({email_verified: true})}).then((r) => r.status)
 # For task k3s:admin-test, carol must also be a platform admin:
 #   kubectl -n kodo patch fleet kodo --type merge \
 #     -p '{"spec":{"admins":{"emails":["<yours>","carol@<EMAIL_DOMAIN>"]}}}'
@@ -71,4 +78,4 @@ for user in alice bob carol; do
   echo "$var=$secret" >> .auth.env
   echo "$email created; $var written to .auth.env"
 done
-echo "Now, in Authrim's Admin UI: untick Signup for Authenticator App, and mark the three addresses as verified (End Users)."
+echo "Now, in Authrim's Admin UI: untick Signup for Authenticator App, and mark the three addresses as verified (see the top of this script)."

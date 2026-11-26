@@ -80,7 +80,7 @@ MEMBERS=$members python3 -c '
 import json, os
 m = {x["email"]: x for x in json.loads(os.environ["MEMBERS"])["members"]}
 for who in ("alice", "bob"):
-    e = f"{who}@{os.environ['EMAIL_DOMAIN']}"
+    e = who + "@" + os.environ["EMAIL_DOMAIN"]
     assert m.get(e, {}).get("role") in ("member", "admin"), (e, m)
 print("team:", ", ".join(e + " (" + x["role"] + ", added by " + x["addedBy"] + ")" for e, x in sorted(m.items())))' || fail "team's members: $members"
 
