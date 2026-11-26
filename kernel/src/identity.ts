@@ -117,7 +117,11 @@ async function emailOf(env: Env, url: string, sub: string, access: string): Prom
 // client must not gain another user's email by sending their own token.
 async function userinfo(url: string, sub: string, access: string): Promise<KnownEmail | null> {
   const res = await fetch(url, { headers: { authorization: `Bearer ${access}`, accept: "application/json" } });
-  if (!res.ok) throw new IdentityError(`userinfo answered ${res.status}`);
+  if (!res.ok) {
+    // The provider's reason, for the log: an OAuth error names itself.
+    const reason = (await res.text().catch(() => "")).slice(0, 300);
+    throw new IdentityError(`userinfo answered ${res.status}${reason ? `: ${reason}` : ""}`);
+  }
   const body = (await res.json()) as Record<string, unknown>;
   if (body.sub !== sub) throw new IdentityError("userinfo is for another subject");
   if (typeof body.email !== "string" || !body.email) return null;
