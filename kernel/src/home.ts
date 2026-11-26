@@ -88,7 +88,7 @@ async function loadCells() {
   try {
     const { cells } = await call("GET", "/workspaces/" + ws + "/cells");
     rows.replaceChildren();
-    if (!cells.length) rows.append(el("tr")).append(el("td", "No cells yet.", { colSpan: 5, className: "muted" }));
+    if (!cells.length) rows.appendChild(el("tr")).append(el("td", "No cells yet.", { colSpan: 5, className: "muted" }));
     for (const cell of cells) {
       const owned = cell.owner.user === me.user;
       const tr = rows.appendChild(el("tr", undefined, { id: "cell-" + cell.id }));
