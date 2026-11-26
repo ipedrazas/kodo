@@ -75,7 +75,7 @@ trap cleanup EXIT
 kubectl delete namespace "$SCRATCH" --ignore-not-found --wait=true --timeout=180s >/dev/null
 
 step "Log in, connect email, publish the mailer"
-login alice "$ALICE_PASSWORD"
+login alice
 out=$(gk alice PUT /connections/email "{\"token\":\"$RESEND_API_KEY\",\"account\":\"$RESEND_FROM\"}")
 [[ $(tail -1 <<<"$out") == 200 ]] || fail "connecting email: $out"
 echo "alice connected email as $(head -1 <<<"$out" | json 'd["account"]')"

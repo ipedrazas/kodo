@@ -83,8 +83,8 @@ cleanup() {
 trap cleanup EXIT
 
 step "Log in, open a chat, grant it Hacker News, put a document in the workspace"
-login alice "$ALICE_PASSWORD"
-login bob "$BOB_PASSWORD"
+login alice
+login bob
 out=$(chat alice POST /workspaces/team/sessions '{}')
 [[ $(code "$out") == 201 ]] || fail "creating a session: $out"
 sid=$(body "$out" | json 'd["id"]')

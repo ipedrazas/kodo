@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end test of identity, TLS and sharing on the k3s cluster, through the
-# real gateway: logs alice and bob in to Dex with curl, then checks each
+# real gateway: signs alice and bob in to Authrim with curl, then checks each
 # Phase 5 acceptance criterion. Expects `task k3s:up` to have run, and the
-# test users' passwords in .auth.env.
+# test users' authenticator secrets in .auth.env.
 #
 # Connections go straight to the gateway address, so this works whatever the
 # public DNS says; names, SNI and certificates are the real ones.
@@ -24,14 +24,14 @@ echo "cert-manager renews at $renewal"
 
 step "Unauthenticated requests go to the identity provider"
 location=$(c anonymous -o /dev/null -w '%{redirect_url}' "$APP/api/whoami")
-[[ $location == "https://auth.$DOMAIN/auth?"* ]] || fail "anonymous request redirected to: $location"
+[[ $location == "$IDP/authorize?"* ]] || fail "anonymous request redirected to: $location"
 location=$(c anonymous -o /dev/null -w '%{redirect_url}' "https://anycell.g.$DOMAIN/")
-[[ $location == "https://auth.$DOMAIN/auth?"* ]] || fail "anonymous cell request redirected to: $location"
-echo "redirected to Dex"
+[[ $location == "$IDP/authorize?"* ]] || fail "anonymous cell request redirected to: $location"
+echo "redirected to Authrim"
 
 step "Log in"
-login alice "$ALICE_PASSWORD"
-login bob "$BOB_PASSWORD"
+login alice
+login bob
 page=$(c alice "$APP/")
 [[ $page == *"<title>kodo</title>"* ]] || fail "the app page after login: $page"
 echo "the app page serves after login"
@@ -65,7 +65,7 @@ cell() { echo "https://$1.g.$DOMAIN"; }
 echo "alice $alices and bob $bobs each see only their own"
 
 step "Sharing"
-share() { api alice "$1" "/workspaces/team/cells/$alices/shares/bob@$DOMAIN" "${2:-}" | tail -1; }
+share() { api alice "$1" "/workspaces/team/cells/$alices/shares/bob@$EMAIL_DOMAIN" "${2:-}" | tail -1; }
 [[ $(share PUT '{"role":"viewer"}') == 200 ]] || fail "sharing failed"
 [[ $(status bob "$(cell "$alices")/") == 200 ]] || fail "viewer cannot read"
 [[ $(status bob -X POST -H "Origin: $(cell "$alices")" "$(cell "$alices")/") == 403 ]] || fail "viewer could write"
@@ -97,7 +97,7 @@ echo "writes from another cell's origin are refused"
 step "Log out"
 c alice -o /dev/null "$APP/logout"
 location=$(c alice -o /dev/null -w '%{redirect_url}' "$APP/api/whoami")
-[[ $location == "https://auth.$DOMAIN/auth?"* ]] || fail "still logged in after logout: $location"
+[[ $location == "$IDP/authorize?"* ]] || fail "still logged in after logout: $location"
 echo "logged out"
 
 printf '\nPASS\n'
