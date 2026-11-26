@@ -14,6 +14,8 @@
 //	GATEKEEPER_BUCKET         bucket[/prefix] for vault/ and audit/
 //	S3_ENDPOINT, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 //	OIDC_ISSUER, OIDC_AUDIENCE, OIDC_JWKS_URL   who users are
+//	OIDC_USERINFO_URL                           the issuer's userinfo endpoint, if
+//	                                            its ID tokens carry no email
 //	OPENBAO_ADDR              OpenBao, for its transit engine
 //	OPENBAO_TRANSIT_MOUNT     default transit
 //	OPENBAO_TRANSIT_KEY       default kodo-gatekeeper
@@ -86,7 +88,9 @@ func run(log *slog.Logger) error {
 	var users gatekeeper.Users
 	if issuer := os.Getenv("OIDC_ISSUER"); issuer != "" {
 		jwks := env("OIDC_JWKS_URL", strings.TrimSuffix(issuer, "/")+"/keys")
-		users = gatekeeper.NewOIDCUsers(ctx, issuer, os.Getenv("OIDC_AUDIENCE"), jwks)
+		oidcUsers := gatekeeper.NewOIDCUsers(ctx, issuer, os.Getenv("OIDC_AUDIENCE"), jwks)
+		oidcUsers.UserinfoURL = os.Getenv("OIDC_USERINFO_URL")
+		users = oidcUsers
 	} else {
 		log.Warn("OIDC_ISSUER is not set: users cannot connect accounts")
 	}

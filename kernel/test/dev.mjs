@@ -4,7 +4,10 @@
 // Paths given to publish() are relative to the kernel directory.
 //
 // The harness plays the identity provider: it serves a JWKS and mints ID
-// tokens for test users, and holds an admin token. With `gatekeeper` set it
+// tokens for test users, and holds an admin token. With `userinfo` set the
+// kernel is given its userinfo endpoint, which answers an access token with
+// what `idp.userinfo` (a Map) holds for it; the tokens it was asked about
+// are kept in `idp.userinfoCalls`. With `gatekeeper` set it
 // also plays the Gatekeeper: it checks each call's signature, records it, and
 // answers with `gatekeeper(call)` if that is a function ({status, headers,
 // body, usage?}), or else 200 with the call it received as the body. Approval
@@ -33,8 +36,9 @@ export const AUDIENCE = "kodo";
 // Test users: the subject is the name, the email is <name>@test.
 export const user = (name) => ({ sub: `sub-${name}`, email: `${name}@test` });
 
-export async function startKernel({ vars = {}, env = {}, gatekeeper = false } = {}) {
+export async function startKernel({ vars = {}, env = {}, gatekeeper = false, userinfo = false } = {}) {
   const idp = await startIdentityProvider();
+  if (userinfo) vars = { OIDC_USERINFO_URL: idp.userinfoUrl, ...vars };
   const adminToken = randomBytes(16).toString("hex");
   const gk = gatekeeper ? await startGatekeeper(typeof gatekeeper === "function" ? gatekeeper : undefined) : null;
   if (gk) vars = { GATEKEEPER_URL: gk.url, GATEKEEPER_KEY: gk.key, FLEET_ID: gk.fleet, ...vars };
@@ -249,8 +253,17 @@ async function startIdentityProvider() {
   const key = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const other = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const jwk = { ...key.publicKey.export({ format: "jwk" }), kid: "test-key", alg: "RS256", use: "sig" };
+  // What /userinfo answers, by access token; a token not here gets 401.
+  const userinfo = new Map();
+  const userinfoCalls = [];
   const server = http.createServer((req, res) => {
     res.setHeader("content-type", "application/json");
+    if (req.url === "/userinfo") {
+      const access = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1];
+      userinfoCalls.push(access);
+      if (!userinfo.has(access)) res.statusCode = 401;
+      return res.end(JSON.stringify(userinfo.get(access) ?? { error: "invalid_token" }));
+    }
     res.end(JSON.stringify({ keys: [jwk] }));
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -268,6 +281,9 @@ async function startIdentityProvider() {
   };
   return {
     jwksUrl: `http://127.0.0.1:${server.address().port}/keys`,
+    userinfoUrl: `http://127.0.0.1:${server.address().port}/userinfo`,
+    userinfo,
+    userinfoCalls,
     token,
     close: () => server.close(),
   };

@@ -1,8 +1,9 @@
-# The Gatekeeper for hiddenfield.dev: its own Tigris bucket, Dex for users,
-# an egress proxy that lets fleets reach only Tigris, and the inference
-# gateway. task k3s:gatekeeper creates the Secrets kodo-gatekeeper-bucket
-# (from .buckets.env) and kodo-gatekeeper-openbao (from .env) before applying
-# this; task k3s:inference creates kodo-gatekeeper-inference.
+# The Gatekeeper for hiddenfield.dev: its own Tigris bucket, Authrim for
+# users, an egress proxy that lets fleets reach only Tigris and Authrim's
+# signing keys, and the inference gateway. task k3s:gatekeeper creates the
+# Secrets kodo-gatekeeper-bucket (from .buckets.env) and
+# kodo-gatekeeper-openbao (from .env) before applying this; task
+# k3s:inference creates kodo-gatekeeper-inference.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: kodo-system
@@ -14,11 +15,15 @@ configMapGenerator:
       - GATEKEEPER_BUCKET=kodo-dev-gatekeeper
       - S3_ENDPOINT=https://t3.storage.dev
       - AWS_REGION=auto
-      - OIDC_ISSUER=https://auth.hiddenfield.dev
-      - OIDC_AUDIENCE=kodo
-      - OIDC_JWKS_URL=http://dex.kodo-auth.svc:5556/keys
-      # Tigris answers on t3.storage.dev and on <bucket>.t3.storage.dev.
-      - GATEKEEPER_EGRESS_ALLOW=t3.storage.dev:443,*.t3.storage.dev:443
+      - OIDC_ISSUER=https://auth.applet.one
+      # The Authrim client "kodo".
+      - OIDC_AUDIENCE=21273353-a720-408d-a439-62b1acf1613f
+      - OIDC_JWKS_URL=https://auth.applet.one/.well-known/jwks.json
+      # Authrim's ID tokens carry no email; it labels the audit records.
+      - OIDC_USERINFO_URL=https://auth.applet.one/userinfo
+      # Tigris answers on t3.storage.dev and on <bucket>.t3.storage.dev;
+      # auth.applet.one is Authrim's signing keys, for the fleet's kernel.
+      - GATEKEEPER_EGRESS_ALLOW=t3.storage.dev:443,*.t3.storage.dev:443,auth.applet.one:443
       # deploy/inference; task k3s:inference.
       - INFERENCE_URL=http://kodo-inference.envoy-gateway-system.svc
       # Public APIs gadgets may read (examples/hn-reader).

@@ -1,6 +1,6 @@
 # The kodo fleet on the k3s cluster, managed by the operator: Tigris bucket
-# kodo-dev, gVisor, identity from the in-cluster Dex, the Gatekeeper, and
-# default-deny egress. The Secret "bucket" holds AWS_ACCESS_KEY_ID and
+# kodo-dev, gVisor, identity from Authrim (auth.applet.one), the Gatekeeper,
+# and default-deny egress. The Secret "bucket" holds AWS_ACCESS_KEY_ID and
 # AWS_SECRET_ACCESS_KEY for a key that can reach only kodo-dev (task k3s:up
 # creates it from .buckets.env).
 apiVersion: kodo.dev/v1alpha1
@@ -21,33 +21,28 @@ spec:
     region: auto
     credentialsSecret: bucket
   auth:
-    issuer: https://auth.hiddenfield.dev
-    audience: kodo
-    # Fetched from inside the cluster, not through the gateway.
-    jwksURL: http://dex.kodo-auth.svc:5556/keys
-  # Platform admins, at app.hiddenfield.dev/admin/. Dex's static users have
-  # no groups, so by email.
-  admins:
-    emails: [carol@hiddenfield.dev]
+    issuer: https://auth.applet.one
+    # The Authrim client "kodo": Authrim's ID tokens name the client as
+    # audience.
+    audience: 21273353-a720-408d-a439-62b1acf1613f
+    # Outside the cluster: fetched through the Gatekeeper's egress proxy.
+    jwksURL: https://auth.applet.one/.well-known/jwks.json
+    # Authrim leaves the email out of its ID tokens: the kernel asks here,
+    # with the access token the gateway forwards (routes.yaml).
+    userinfoURL: https://auth.applet.one/userinfo
+  # Platform admins, at /admin/, are named by the email they sign in to
+  # Authrim with. This repository is public, so they are set on the cluster
+  # and not here; applying this file leaves them as they are:
+  #   kubectl -n kodo patch fleet kodo --type merge -p '{"spec":{"admins":{"emails":["<address>"]}}}'
   # The inference gateway's models and rate limits, which the operator
   # reports to the kernel for the dashboard.
   inference: {}
   # Capability calls go to the Gatekeeper in kodo-system.
   gatekeeper: {}
   # Default-deny egress: DNS, the fleet's own nodes and the Gatekeeper, which
-  # proxies HTTPS to Tigris and nothing else, plus Dex's signing keys.
+  # proxies HTTPS to Tigris and to Authrim's signing keys and nothing else.
   egress:
     proxy: true
-    allow:
-      - to:
-          - namespaceSelector:
-              matchLabels:
-                kubernetes.io/metadata.name: kodo-auth
-            podSelector:
-              matchLabels:
-                app: dex
-        ports:
-          - port: 5556
   resources:
     requests:
       cpu: 250m

@@ -96,6 +96,13 @@ spec:
                       JWKSURL is where the kernel fetches the issuer's signing keys; it may
                       be an in-cluster URL. Defaults to <issuer>/keys.
                     type: string
+                  userinfoURL:
+                    description: |-
+                      UserinfoURL is the issuer's userinfo endpoint, for an issuer that
+                      leaves the email out of its ID tokens. The kernel asks it for the
+                      user's email, with the access token the gateway forwards as a bearer
+                      token (forwardAccessToken in the login's SecurityPolicy).
+                    type: string
                 required:
                 - audience
                 - issuer

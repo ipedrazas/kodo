@@ -160,6 +160,12 @@ type AuthSpec struct {
 	// be an in-cluster URL. Defaults to <issuer>/keys.
 	// +optional
 	JWKSURL string `json:"jwksURL,omitempty"`
+	// UserinfoURL is the issuer's userinfo endpoint, for an issuer that
+	// leaves the email out of its ID tokens. The kernel asks it for the
+	// user's email, with the access token the gateway forwards as a bearer
+	// token (forwardAccessToken in the login's SecurityPolicy).
+	// +optional
+	UserinfoURL string `json:"userinfoURL,omitempty"`
 }
 
 // BucketSpec locates the fleet's bucket and its credentials.

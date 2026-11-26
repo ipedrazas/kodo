@@ -108,6 +108,8 @@ kodo has no database. Object storage is the system of record.
 - with `sub` (the user's stable id), `email` and `email_verified`. Shares and workspace memberships are keyed by email, and an email the IdP marks unverified counts for nothing;
 - optionally, a groups claim (`spec.admins.groupsClaim`, default `groups`) listing the user's groups, for platform admins by group. Without groups, name admins by email in `spec.admins.emails` (and the IdP must say the email is verified).
 
+An issuer that leaves `email` out of its ID tokens (Authrim does, unless the request carries a `claims` parameter, which Envoy Gateway cannot send) needs two settings: `Fleet.spec.auth.userinfoURL` and the Gatekeeper's `OIDC_USERINFO_URL`, the issuer's userinfo endpoint, and `forwardAccessToken: true` in the login's SecurityPolicy. The kernel and the Gatekeeper then ask the userinfo endpoint for the email, with the user's access token.
+
 `Fleet.spec.auth.jwksURL` defaults to `<issuer>/keys`, which is **Dex's path**. Every other provider needs it set explicitly (Keycloak: `<issuer>/protocol/openid-connect/certs`; most others: the `jwks_uri` from `<issuer>/.well-known/openid-configuration`). The Gatekeeper's `OIDC_JWKS_URL` has the same default.
 
 **Reference.** Dex v2.45.1 in `kodo-auth` with static users (alice, bob, carol), its keys reached in-cluster at `http://dex.kodo-auth.svc:5556/keys` ([`dex.yaml`](../deploy/k3s/dex.yaml)). Static passwords have no groups, so carol is an admin by email. The kernel tests play the IdP: they serve a JWKS and mint tokens.

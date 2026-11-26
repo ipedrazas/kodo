@@ -25,6 +25,7 @@ export interface Env {
   OIDC_ISSUER?: string;
   OIDC_AUDIENCE?: string;
   OIDC_JWKS_URL?: string;
+  OIDC_USERINFO_URL?: string;
   ADMIN_TOKEN_SHA256?: string;
   PLATFORM_ADMIN_GROUP?: string;
   PLATFORM_ADMIN_GROUPS_CLAIM?: string;

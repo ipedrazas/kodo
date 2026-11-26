@@ -5,6 +5,7 @@ export const DEPLOY_CONFIG = {
   issuer: "",
   audience: "",
   jwksUrl: "",
+  userinfoUrl: "",
   adminTokenSha256: "",
   gatekeeperUrl: "",
   gatekeeperKey: "",

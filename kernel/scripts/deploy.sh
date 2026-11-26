@@ -1,6 +1,8 @@
 #!/bin/sh
 # Deploys the kernel with its identity settings from the environment:
 #   OIDC_ISSUER, OIDC_AUDIENCE, OIDC_JWKS_URL   the identity provider
+#   OIDC_USERINFO_URL                           its userinfo endpoint, if its
+#                                               ID tokens carry no email
 #   KERNEL_ADMIN_TOKEN                          the operator's admin token
 #   PLATFORM_ADMIN_GROUP, PLATFORM_ADMIN_GROUPS_CLAIM, PLATFORM_ADMIN_EMAILS
 #                                               who the platform admins are
@@ -32,6 +34,7 @@ export const DEPLOY_CONFIG = {
   issuer: $(quote "${OIDC_ISSUER:-}"),
   audience: $(quote "${OIDC_AUDIENCE:-}"),
   jwksUrl: $(quote "${OIDC_JWKS_URL:-}"),
+  userinfoUrl: $(quote "${OIDC_USERINFO_URL:-}"),
   adminTokenSha256: $(quote "$hash"),
   gatekeeperUrl: $(quote "${GATEKEEPER_URL:-}"),
   gatekeeperKey: $(quote "${GATEKEEPER_KEY:-}"),
