@@ -48,5 +48,8 @@ test/e2e/results/
 # Scoped bucket keys (deploy/k3s/bucket-keys.sh)
 .buckets.env
 .buckets.env.tmp
+
+# Cloudflare Tunnel credentials (deploy/k3s/tunnel.sh)
+.tunnel.json
 applet-one
 celld-examples

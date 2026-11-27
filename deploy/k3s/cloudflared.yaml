@@ -1,0 +1,132 @@
+# Public access at kodo.applet.one through a Cloudflare Tunnel: cloudflared
+# dials out to Cloudflare, which sends it the requests for app.kodo.applet.one
+# and every cell hostname under g.kodo.applet.one, and it forwards them to the
+# Envoy gateway over HTTPS. TLS from Cloudflare's edge ends here and starts
+# again to the gateway, whose certificate for these names is from the private
+# CA in gateway.yaml; the routes and login are in public.yaml. The Secret
+# "cloudflared" (credentials.json and TUNNEL_ID) comes from
+# deploy/k3s/tunnel.sh; task k3s:tunnel creates it and applies this.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared
+  namespace: kodo-gateway
+data:
+  config.yaml: |
+    credentials-file: /etc/cloudflared/credentials/credentials.json
+    no-autoupdate: true
+    metrics: 0.0.0.0:2000
+    originRequest:
+      # The gateway picks its listener, and so its routes, by SNI: send the
+      # request's own hostname, which the gateway's certificate must cover.
+      matchSNItoHost: true
+      # The CA that signed that certificate (Certificate kodo-applet-one).
+      caPool: /etc/cloudflared/ca/ca.crt
+    ingress:
+      # The Service Envoy Gateway creates for Gateway kodo-gateway/kodo; the
+      # suffix is a hash of that namespace and name.
+      - hostname: app.kodo.applet.one
+        service: https://envoy-kodo-gateway-kodo-9c6f46a6.envoy-gateway-system.svc:443
+      - hostname: "*.g.kodo.applet.one"
+        service: https://envoy-kodo-gateway-kodo-9c6f46a6.envoy-gateway-system.svc:443
+      - service: http_status:404
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: kodo-gateway
+spec:
+  # Each replica holds four connections to Cloudflare; two survive a node.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cloudflared
+  template:
+    metadata:
+      labels:
+        app: cloudflared
+      annotations:
+        # Changes when the config does, so cloudflared restarts to read it.
+        kodo.dev/config-version: "1"
+    spec:
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: cloudflared
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:2026.11.2
+          args: [tunnel, --config, /etc/cloudflared/config/config.yaml, run, $(TUNNEL_ID)]
+          env:
+            - name: TUNNEL_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflared
+                  key: TUNNEL_ID
+          ports:
+            - name: metrics
+              containerPort: 2000
+          # /ready answers 200 while at least one connection to Cloudflare is up.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cloudflared/config
+            - name: credentials
+              mountPath: /etc/cloudflared/credentials
+            - name: ca
+              mountPath: /etc/cloudflared/ca
+      volumes:
+        - name: config
+          configMap:
+            name: cloudflared
+        - name: credentials
+          secret:
+            secretName: cloudflared
+            items:
+              - key: credentials.json
+                path: credentials.json
+        # Only the CA certificate, not the gateway's private key.
+        - name: ca
+          secret:
+            secretName: kodo-applet-one-tls
+            items:
+              - key: ca.crt
+                path: ca.crt
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cloudflared
+  namespace: kodo-gateway
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: cloudflared

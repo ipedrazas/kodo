@@ -1,6 +1,6 @@
 # Runbook
 
-How to check, deploy, change and repair a running kodo platform. The examples use the hiddenfield.dev environment on the k3s cluster (kube context `default`, see [deploy/k3s](../deploy/k3s/README.md)); on another cluster the names are the same apart from the domain, the fleet's namespace and the IdP. How the pieces fit is in [architecture.md](architecture.md).
+How to check, deploy, change and repair a running kodo platform. The examples use the hiddenfield.dev environment on the k3s cluster (kube context `default`, see [deploy/k3s](../deploy/k3s/README.md)); on another cluster the names are the same apart from the domain, the fleet's namespace and the IdP. How the pieces fit is in [architecture.md](architecture.md). Public access at kodo.applet.one, through a Cloudflare Tunnel and Authrim, has its own runbook: [public-access.md](public-access.md).
 
 ## At a glance
 

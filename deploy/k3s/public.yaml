@@ -1,0 +1,112 @@
+# The public names: app.kodo.applet.one and every cell under
+# g.kodo.applet.one, which reach the gateway through the Cloudflare Tunnel
+# (cloudflared.yaml). The same backends as routes.yaml, behind a login with
+# Authrim at auth.applet.one, with its own session cookie on kodo.applet.one.
+# task k3s:tunnel replaces AUTHRIM_CLIENT_ID and creates the Secret
+# oidc-client-authrim, both from .auth.env.
+#
+# The kernel and the Gatekeeper accept ID tokens from one issuer, the Fleet's
+# auth and the Gatekeeper's OIDC_ISSUER. Until those name Authrim, a login
+# here succeeds at the gateway and is refused behind it.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kodo-public
+  namespace: kodo
+spec:
+  parentRefs:
+    - name: kodo
+      namespace: kodo-gateway
+      sectionName: https-public
+    - name: kodo
+      namespace: kodo-gateway
+      sectionName: https-public-cells
+  hostnames:
+    - app.kodo.applet.one
+    - "*.g.kodo.applet.one"
+  rules:
+    - backendRefs:
+        - name: kodo
+          port: 80
+---
+# Only on the app host, as in routes.yaml.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kodo-gatekeeper-public
+  namespace: kodo
+spec:
+  parentRefs:
+    - name: kodo
+      namespace: kodo-gateway
+      sectionName: https-public
+  hostnames:
+    - app.kodo.applet.one
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /gatekeeper/
+      backendRefs:
+        - name: kodo-gatekeeper
+          namespace: kodo-system
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kodo-agent-public
+  namespace: kodo
+spec:
+  parentRefs:
+    - name: kodo
+      namespace: kodo-gateway
+      sectionName: https-public
+  hostnames:
+    - app.kodo.applet.one
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chat
+      backendRefs:
+        - name: kodo-agent
+          namespace: kodo-system
+          port: 80
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: kodo-login-public
+  namespace: kodo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kodo-public
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kodo-gatekeeper-public
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kodo-agent-public
+  oidc:
+    provider:
+      issuer: https://auth.applet.one
+    clientID: AUTHRIM_CLIENT_ID
+    clientSecret:
+      # The key must be client-secret.
+      name: oidc-client-authrim
+    scopes: [openid, email, profile, offline_access]
+    redirectURL: https://app.kodo.applet.one/oauth2/callback
+    logoutPath: /logout
+    cookieDomain: kodo.applet.one
+    cookieNames:
+      idToken: kodo-id
+      accessToken: kodo-access
+    forwardIDToken:
+      header: x-kodo-identity
+    # As a bearer token in Authorization: the kernel and the Gatekeeper ask
+    # Authrim's userinfo endpoint for the email, which is not in the ID token.
+    forwardAccessToken: true
+    refreshToken: true
