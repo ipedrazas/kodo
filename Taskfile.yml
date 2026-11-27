@@ -264,6 +264,20 @@ tasks:
       - task: k3s:inference
       - task: k3s:agent
 
+  k3s:fleet:
+    desc: Apply deploy/k3s/fleet.yaml to the k3s cluster with its kernel image filled in (KERNEL_IMAGE; without it, the image the Fleet runs now)
+    cmds:
+      # The file holds a placeholder for the image: applied as it is, the
+      # kernel's deploy Job cannot start.
+      - >-
+        image="{{.KERNEL_IMAGE}}";
+        [ -n "$image" ] || image=$(kubectl --context {{.K3S_CONTEXT}} -n kodo get fleet kodo -o jsonpath='{.spec.kernel}');
+        case "$image" in ""|KERNEL_IMAGE) echo "set KERNEL_IMAGE: the Fleet has no kernel image to keep" >&2; exit 1;; esac;
+        echo "kernel image: $image";
+        sed "s#KERNEL_IMAGE#$image#" deploy/k3s/fleet.yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo wait fleet/kodo --for=condition=KernelDeployed --timeout=600s
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo get fleet kodo
+
   k3s:suspend:
     desc: Stop every node of the kodo fleet on the k3s cluster; cells stay in the bucket, and nothing is served until task k3s:resume
     cmds:
