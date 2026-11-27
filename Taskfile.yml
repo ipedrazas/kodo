@@ -423,3 +423,20 @@ tasks:
     desc: Log in through the hiddenfield.dev gateway as the test users and check identity, TLS and sharing
     cmds:
       - test/e2e/identity.sh
+
+  k3s:tunnel:
+    desc: Serve kodo publicly at kodo.applet.one through a Cloudflare Tunnel (CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_TUNNEL_API_TOKEN in .env, AUTHRIM_CLIENT_ID and AUTHRIM_CLIENT_SECRET in .auth.env); DNS moves with deploy/k3s/tunnel.sh dns
+    cmds:
+      - deploy/k3s/tunnel.sh create
+      # The private CA, the certificate and the listeners for kodo.applet.one.
+      - sed "s/LETSENCRYPT_EMAIL/$LETSENCRYPT_EMAIL/" deploy/k3s/gateway.yaml | kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo-gateway wait certificate/kodo-applet-one --for=condition=Ready --timeout=120s
+      - >-
+        set -a && . ./.auth.env && set +a &&
+        kubectl --context {{.K3S_CONTEXT}} -n kodo create secret generic oidc-client-authrim
+        --from-literal=client-secret="${AUTHRIM_CLIENT_SECRET:?set AUTHRIM_CLIENT_SECRET in .auth.env}"
+        --dry-run=client -o yaml | kubectl --context {{.K3S_CONTEXT}} apply -f - &&
+        sed "s/AUTHRIM_CLIENT_ID/${AUTHRIM_CLIENT_ID:?set AUTHRIM_CLIENT_ID in .auth.env}/" deploy/k3s/public.yaml |
+        kubectl --context {{.K3S_CONTEXT}} apply -f -
+      - kubectl --context {{.K3S_CONTEXT}} apply -f deploy/k3s/cloudflared.yaml
+      - kubectl --context {{.K3S_CONTEXT}} -n kodo-gateway rollout status deploy/cloudflared --timeout=300s
